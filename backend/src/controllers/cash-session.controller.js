@@ -1,4 +1,36 @@
-const { CashSession } = require('../models');
+const { CashSession, Cashflow, PaymentMethod } = require('../models');
+
+function calculateSessionSummary(session, movements) {
+  const openingAmount = Number(session?.openingAmount || 0);
+  const totalCollections = movements
+    .filter((m) => m.type === 'COLLECTION')
+    .reduce((acc, m) => acc + Number(m.amount || 0), 0);
+  const totalPayments = movements
+    .filter((m) => m.type === 'PAYMENT')
+    .reduce((acc, m) => acc + Number(m.amount || 0), 0);
+  const expectedBalance = openingAmount + totalCollections - totalPayments;
+  const countedBalance = session?.status === 'CLOSED' ? Number(session.closingAmount || 0) : null;
+  const persistedExpected = session?.status === 'CLOSED' ? Number(session.expectedClosingAmount ?? expectedBalance) : expectedBalance;
+  const persistedDifference = session?.status === 'CLOSED'
+    ? Number(session.closingDifferenceAmount ?? ((countedBalance ?? 0) - persistedExpected))
+    : null;
+  return {
+    openingAmount,
+    totalCollections,
+    totalPayments,
+    expectedBalance: persistedExpected,
+    countedBalance,
+    difference: persistedDifference,
+  };
+}
+
+async function getSessionMovements(sessionId) {
+  return Cashflow.findAll({
+    where: { cashSessionId: sessionId },
+    include: [{ model: PaymentMethod, attributes: ['id', 'name'] }],
+    order: [['movementAt', 'DESC'], ['id', 'DESC']],
+  });
+}
 
 async function getMyCashSession(req, res, next) {
   try {
@@ -8,16 +40,29 @@ async function getMyCashSession(req, res, next) {
       order: [['openedAt', 'DESC']],
     });
 
-    if (openSession) {
-      return res.json({ hasOpenSession: true, session: openSession });
-    }
-
-    const lastSession = await CashSession.findOne({
+    const targetSession = openSession || await CashSession.findOne({
       where: { userId },
       order: [['openedAt', 'DESC']],
     });
 
-    return res.json({ hasOpenSession: false, session: lastSession });
+    if (!targetSession) {
+      return res.json({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
+    }
+
+    const movements = await getSessionMovements(targetSession.id);
+    const summary = calculateSessionSummary(targetSession, movements);
+    const recentSessions = await CashSession.findAll({
+      where: { userId },
+      order: [['openedAt', 'DESC']],
+      limit: 30,
+    });
+    return res.json({
+      hasOpenSession: targetSession.status === 'OPEN',
+      session: targetSession,
+      summary,
+      movements,
+      recentSessions,
+    });
   } catch (error) {
     return next(error);
   }
@@ -45,7 +90,18 @@ async function openCashSession(req, res, next) {
       status: 'OPEN',
     });
 
-    return res.status(201).json(session);
+    return res.status(201).json({
+      session,
+      summary: {
+        openingAmount: Number(session.openingAmount || 0),
+        totalCollections: 0,
+        totalPayments: 0,
+        expectedBalance: Number(session.openingAmount || 0),
+        countedBalance: null,
+        difference: null,
+      },
+      movements: [],
+    });
   } catch (error) {
     return next(error);
   }
@@ -70,12 +126,24 @@ async function closeCashSession(req, res, next) {
       return res.status(400).json({ message: 'El monto de cierre es invalido' });
     }
 
+    const movements = await getSessionMovements(session.id);
+    const preCloseSummary = calculateSessionSummary(session, movements);
+    const closedAt = new Date();
+
     session.status = 'CLOSED';
-    session.closedAt = new Date();
+    session.closedAt = closedAt;
     session.closingAmount = amount;
+    session.expectedClosingAmount = preCloseSummary.expectedBalance;
+    session.closingDifferenceAmount = amount - preCloseSummary.expectedBalance;
     await session.save();
 
-    return res.json(session);
+    const summary = {
+      ...preCloseSummary,
+      countedBalance: amount,
+      difference: amount - preCloseSummary.expectedBalance,
+    };
+
+    return res.json({ session, summary, movements });
   } catch (error) {
     return next(error);
   }

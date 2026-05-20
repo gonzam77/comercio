@@ -4,7 +4,15 @@ const { requireOpenCashSession } = require('../services/cash-session.service');
 
 async function listSales(_req, res, next) {
   try {
-    const rows = await Sale.findAll({ order: [['saleDate', 'DESC'], ['id', 'DESC']] });
+    const rows = await Sale.findAll({
+      include: [
+        {
+          model: SalePayment,
+          include: [{ model: PaymentMethod, attributes: ['id', 'name'] }],
+        },
+      ],
+      order: [['saleDate', 'DESC'], ['id', 'DESC']],
+    });
     res.json(rows);
   } catch (error) {
     next(error);
@@ -64,8 +72,9 @@ async function createSale(req, res, next) {
         throw err;
       }
 
+      let cashSession = null;
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
-        await requireOpenCashSession({ userId, t });
+        cashSession = await requireOpenCashSession({ userId, t });
       }
 
       const normalizedDetails = [];
@@ -126,11 +135,15 @@ async function createSale(req, res, next) {
       }, { transaction: t });
 
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
+        const now = new Date();
         await Cashflow.create({
-          movementDate: saleDate,
+          movementDate: now.toISOString().slice(0, 10),
+          movementAt: now,
           concept: `Ingreso por venta ${invoiceNumber || sale.id}`,
           amount: total,
           type: 'COLLECTION',
+          userId,
+          cashSessionId: cashSession.id,
           paymentMethodId: method.id,
         }, { transaction: t });
       }

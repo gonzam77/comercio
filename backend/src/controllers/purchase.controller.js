@@ -4,7 +4,10 @@ const { requireOpenCashSession } = require('../services/cash-session.service');
 
 async function listPurchases(_req, res, next) {
   try {
-    const rows = await Purchase.findAll({ order: [['purchaseDate', 'DESC'], ['id', 'DESC']] });
+    const rows = await Purchase.findAll({
+      include: [{ model: PaymentMethod, attributes: ['id', 'name'] }],
+      order: [['purchaseDate', 'DESC'], ['id', 'DESC']],
+    });
     res.json(rows);
   } catch (error) {
     next(error);
@@ -63,8 +66,9 @@ async function createPurchase(req, res, next) {
         throw err;
       }
 
+      let cashSession = null;
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
-        await requireOpenCashSession({ userId, t });
+        cashSession = await requireOpenCashSession({ userId, t });
       }
 
       const movement = await createMovement({
@@ -101,11 +105,15 @@ async function createPurchase(req, res, next) {
       }
 
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
+        const now = new Date();
         await Cashflow.create({
-          movementDate: purchaseDate,
+          movementDate: now.toISOString().slice(0, 10),
+          movementAt: now,
           concept: `Egreso por compra ${invoiceNumber || purchase.id}`,
           amount: total,
           type: 'PAYMENT',
+          userId,
+          cashSessionId: cashSession.id,
           paymentMethodId: method.id,
         }, { transaction: t });
       }

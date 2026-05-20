@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { closeCashSession, createProduct, createPurchase, createSale, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession } from "../lib/api";
+import { closeCashSession, createClient, createProduct, createPurchase, createSale, createSupplier, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession } from "../lib/api";
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 3 });
@@ -63,6 +63,10 @@ export default function DashboardPage() {
   });
 
   const [productForm, setProductForm] = useState({ sku: "", name: "", brandId: "", costPrice: "", salePrice: "" });
+  const [clientForm, setClientForm] = useState({ fullName: "", taxId: "", phone: "", address: "" });
+  const [supplierForm, setSupplierForm] = useState({ businessName: "", taxId: "", phone: "", address: "" });
+  const [showClientForm, setShowClientForm] = useState(false);
+  const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [expandedMovementId, setExpandedMovementId] = useState(null);
   const [expandedSaleId, setExpandedSaleId] = useState(null);
   const [expandedPurchaseId, setExpandedPurchaseId] = useState(null);
@@ -74,10 +78,12 @@ export default function DashboardPage() {
   const [productOnlyStock, setProductOnlyStock] = useState(false);
   const [productStockOrder, setProductStockOrder] = useState("none");
   const [dashboardRange, setDashboardRange] = useState("all");
-  const [cashSessionInfo, setCashSessionInfo] = useState({ hasOpenSession: false, session: null });
+  const [cashSessionInfo, setCashSessionInfo] = useState({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
   const [showCashPrompt, setShowCashPrompt] = useState(false);
   const [openAmountInput, setOpenAmountInput] = useState("0");
   const [closeAmountInput, setCloseAmountInput] = useState("");
+  const [showCloseCashModal, setShowCloseCashModal] = useState(false);
+  const [cartProductModal, setCartProductModal] = useState({ open: false, product: null, quantity: "1" });
 
   const roles = sessionUser?.roles || [];
   const isAdmin = roles.includes("ADMIN");
@@ -102,6 +108,33 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshCashSession(authToken) {
+    if (!authToken) {
+      const emptyInfo = { hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] };
+      setCashSessionInfo(emptyInfo);
+      return emptyInfo;
+    }
+    try {
+      const result = await getMyCashSession(authToken);
+      const info = {
+        hasOpenSession: Boolean(result?.hasOpenSession),
+        session: result?.session || null,
+        summary: result?.summary || null,
+        movements: result?.movements || [],
+        recentSessions: result?.recentSessions || [],
+      };
+      setCashSessionInfo(info);
+      return info;
+    } catch (error) {
+      if (error.status === 404) {
+        const emptyInfo = { hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] };
+        setCashSessionInfo(emptyInfo);
+        return emptyInfo;
+      }
+      throw error;
+    }
+  }
+
   useEffect(() => {
     const savedToken = localStorage.getItem("comercio_token") || "";
     const savedUser = localStorage.getItem("comercio_user");
@@ -110,12 +143,15 @@ export default function DashboardPage() {
       setToken(savedToken);
       setSessionUser(user);
       load(savedToken);
-      refreshCashSession(savedToken);
+      refreshCashSession(savedToken).then((info) => {
+        setShowCashPrompt(Boolean(info && !info.hasOpenSession));
+      }).catch(() => {});
     }
   }, []);
 
   const metrics = useMemo(() => {
     const now = new Date();
+    const todayDate = today();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOf30Days = new Date(now);
     startOf30Days.setDate(now.getDate() - 30);
@@ -124,6 +160,7 @@ export default function DashboardPage() {
 
     function inRange(dateText) {
       if (dashboardRange === "all") return true;
+      if (dashboardRange === "today") return String(dateText || "") === todayDate;
       const date = new Date(`${dateText}T00:00:00`);
       if (dashboardRange === "month") return date >= startOfMonth;
       if (dashboardRange === "30d") return date >= startOf30Days;
@@ -137,10 +174,12 @@ export default function DashboardPage() {
     const salesTotal = sumTotal(salesFiltered);
     const purchasesTotal = sumTotal(purchasesFiltered);
     const stockTotal = data.inventories.reduce((acc, i) => acc + Number(i.stock || 0), 0);
-    const cashIn = data.cashflows.filter((c) => c.type === "COLLECTION").reduce((a, b) => a + Number(b.amount || 0), 0);
-    const cashOut = data.cashflows.filter((c) => c.type === "PAYMENT").reduce((a, b) => a + Number(b.amount || 0), 0);
-    return { salesTotal, purchasesTotal, stockTotal, cashBalance: cashIn - cashOut };
-  }, [data, dashboardRange]);
+    const cashBalance = cashSessionInfo.hasOpenSession
+      ? Number(cashSessionInfo.summary?.expectedBalance || 0)
+      : 0;
+
+    return { salesTotal, purchasesTotal, stockTotal, cashBalance };
+  }, [data, dashboardRange, cashSessionInfo]);
 
   const topProducts = useMemo(() => {
     const map = new Map();
@@ -243,6 +282,7 @@ export default function DashboardPage() {
           clientName: client?.fullName || `Cliente ${sale.clientId}`,
           userName: user?.name || `Usuario ${sale.userId}`,
           warehouseName: warehouse?.name || `Deposito ${sale.warehouseId}`,
+          paymentMethodName: sale?.SalePayments?.[0]?.PaymentMethod?.name || "-",
           total: Number(sale.total || 0),
           details,
         };
@@ -270,6 +310,7 @@ export default function DashboardPage() {
           supplierName: supplier?.businessName || `Proveedor ${purchase.supplierId}`,
           userName: user?.name || `Usuario ${purchase.userId}`,
           warehouseName: warehouse?.name || `Deposito ${purchase.warehouseId}`,
+          paymentMethodName: purchase?.PaymentMethod?.name || "-",
           total: Number(purchase.total || 0),
           details,
         };
@@ -288,6 +329,11 @@ export default function DashboardPage() {
       .sort((a, b) => a.stock - b.stock)
       .slice(0, 8);
   }, [data.products, stockByProduct]);
+
+  const cashSessionMovements = useMemo(
+    () => cashSessionInfo.movements || [],
+    [cashSessionInfo.movements]
+  );
 
   const defaultConsumerClientId = useMemo(() => {
     const match = data.clients.find((c) => String(c.fullName || "").toLowerCase().includes("consumidor final"));
@@ -348,7 +394,7 @@ export default function DashboardPage() {
     localStorage.removeItem("comercio_user");
     setToken("");
     setSessionUser(null);
-    setCashSessionInfo({ hasOpenSession: false, session: null });
+    setCashSessionInfo({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
     setShowCashPrompt(false);
     setSaleDetailById({});
     setPurchaseDetailById({});
@@ -378,9 +424,17 @@ export default function DashboardPage() {
         setStatus({ type: "error", text: "Monto de apertura invalido" });
         return;
       }
-      await openCashSession({ openingAmount: amount }, token);
+      const opened = await openCashSession({ openingAmount: amount }, token);
+      setCashSessionInfo((prev) => ({
+        hasOpenSession: true,
+        session: opened?.session || null,
+        summary: opened?.summary || null,
+        movements: opened?.movements || [],
+        recentSessions: opened?.session ? [opened.session, ...(prev.recentSessions || [])] : (prev.recentSessions || []),
+      }));
       await refreshCashSession(token);
       setShowCashPrompt(false);
+      setCloseAmountInput("");
       setStatus({ type: "ok", text: "Caja abierta correctamente" });
     } catch (error) {
       setStatus({ type: "error", text: error.message });
@@ -398,9 +452,24 @@ export default function DashboardPage() {
       await refreshCashSession(token);
       setCloseAmountInput("");
       setStatus({ type: "ok", text: "Caja cerrada correctamente" });
+      return true;
     } catch (error) {
       setStatus({ type: "error", text: error.message });
+      return false;
     }
+  }
+
+  function openCloseCashModal() {
+    setShowCloseCashModal(true);
+  }
+
+  function closeCloseCashModal() {
+    setShowCloseCashModal(false);
+  }
+
+  async function confirmCloseCashSession() {
+    const ok = await handleCloseCashSession();
+    if (ok) closeCloseCashModal();
   }
 
   async function handleToggleSaleDetail(saleId) {
@@ -461,11 +530,19 @@ export default function DashboardPage() {
   }
 
   function addProductToSaleCart(product) {
-    const inputQty = window.prompt(`¿Cuántas unidades de "${product.name}" querés agregar?`, "1");
-    if (inputQty === null) return;
-    const quantityToAdd = Number(inputQty);
+    setCartProductModal({ open: true, product, quantity: "1" });
+  }
+
+  function closeAddToCartModal() {
+    setCartProductModal({ open: false, product: null, quantity: "1" });
+  }
+
+  function confirmAddProductToSaleCart() {
+    const product = cartProductModal.product;
+    const quantityToAdd = Number(cartProductModal.quantity);
+    if (!product) return;
     if (!Number.isFinite(quantityToAdd) || quantityToAdd <= 0) {
-      setStatus({ type: "error", text: "Cantidad inválida. Debe ser mayor a 0." });
+      setStatus({ type: "error", text: "Cantidad invalida. Debe ser mayor a 0." });
       return;
     }
 
@@ -487,6 +564,7 @@ export default function DashboardPage() {
         ],
     }));
     setStatus({ type: "ok", text: `${product.name}: se agregaron ${quantityToAdd} unidad(es) al carrito` });
+    closeAddToCartModal();
   }
 
   function openNewSaleForm() {
@@ -626,6 +704,48 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleClient(e) {
+    e.preventDefault();
+    try {
+      await createClient(
+        {
+          fullName: clientForm.fullName,
+          taxId: clientForm.taxId || null,
+          phone: clientForm.phone || null,
+          address: clientForm.address || null,
+        },
+        token
+      );
+      setStatus({ type: "ok", text: "Cliente creado correctamente" });
+      setClientForm({ fullName: "", taxId: "", phone: "", address: "" });
+      setShowClientForm(false);
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+    }
+  }
+
+  async function handleSupplier(e) {
+    e.preventDefault();
+    try {
+      await createSupplier(
+        {
+          businessName: supplierForm.businessName,
+          taxId: supplierForm.taxId || null,
+          phone: supplierForm.phone || null,
+          address: supplierForm.address || null,
+        },
+        token
+      );
+      setStatus({ type: "ok", text: "Proveedor creado correctamente" });
+      setSupplierForm({ businessName: "", taxId: "", phone: "", address: "" });
+      setShowSupplierForm(false);
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+    }
+  }
+
   if (!token || !sessionUser) {
     return (
       <main>
@@ -660,7 +780,8 @@ export default function DashboardPage() {
     );
   }
 
-  const tabList = [["dashboard", "Dashboard"], ["sales-list", "Listado ventas"], ["purchases-list", "Listado compras"], ["operations", "Inventario y movimientos"]];
+  const tabList = [["dashboard", "Dashboard"], ["cash", "Caja"], ["sales-list", "Ventas"], ["purchases-list", "Compras"], ["operations", "Inventario y movimientos"]];
+  if (canOperate) tabList.push(["contacts", "Clientes y proveedores"]);
   if (canOperate) tabList.push(["products", "Productos"]);
 
   return (
@@ -673,40 +794,66 @@ export default function DashboardPage() {
         <button className="secondary" onClick={handleLogout}>Cerrar sesion</button>
       </div>
 
-      <div className="panel section" style={{ marginBottom: 12 }}>
-        <div className="row">
-          <div>
-            <strong>Estado de caja</strong>
-            <div className="label">
-              {cashSessionInfo.hasOpenSession
-                ? `Abierta desde ${new Date(cashSessionInfo.session?.openedAt).toLocaleString()}`
-                : "Sin caja abierta"}
+      {showCashPrompt ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Apertura de caja</h2>
+            <p className="label">Ingresa el monto inicial de caja chica para comenzar a operar.</p>
+            <div className="row">
+              <input type="number" min="0" step="0.01" value={openAmountInput} onChange={(e) => setOpenAmountInput(e.target.value)} />
+              <button type="button" onClick={handleOpenCashSession}>Abrir caja</button>
+              {isAdmin ? <button type="button" className="secondary" onClick={() => setShowCashPrompt(false)}>Entrar en modo administrativo</button> : null}
             </div>
+            {!isAdmin ? <p className="label">Tu perfil requiere abrir caja para continuar.</p> : null}
           </div>
-          {cashSessionInfo.hasOpenSession ? (
-            <>
+        </div>
+      ) : null}
+
+      {showCloseCashModal ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Confirmar cierre de caja</h2>
+            <p className="label">Esta accion cerrara la caja actual con el monto de cierre ingresado.</p>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={closeCloseCashModal}>Cancelar</button>
+              <button type="button" className="danger" onClick={confirmCloseCashSession}>Confirmar cierre</button>
+            </div>
+
+            {!cashSessionInfo.hasOpenSession && cashSessionInfo.session?.status === "CLOSED" ? (
+              <div className="panel card" style={{ marginBottom: 12 }}>
+                <div className="label">Ultimo cierre registrado</div>
+                <div className="label">
+                  {cashSessionInfo.session.closedAt
+                    ? `Cerrada el ${new Date(cashSessionInfo.session.closedAt).toLocaleString()}`
+                    : "-"}
+                </div>
+                <div className="label">
+                  Esperado: {money.format(Number(cashSessionInfo.session.expectedClosingAmount || 0))} | Contado: {money.format(Number(cashSessionInfo.session.closingAmount || 0))} | Diferencia: {money.format(Number(cashSessionInfo.session.closingDifferenceAmount || 0))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {cartProductModal.open ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Agregar al carrito</h2>
+            <p className="label">Producto: <strong>{cartProductModal.product?.name}</strong></p>
+            <div className="row">
               <input
                 type="number"
-                min="0"
-                step="0.01"
-                placeholder="Monto de cierre"
-                value={closeAmountInput}
-                onChange={(e) => setCloseAmountInput(e.target.value)}
+                min="0.001"
+                step="0.001"
+                value={cartProductModal.quantity}
+                onChange={(e) => setCartProductModal((prev) => ({ ...prev, quantity: e.target.value }))}
               />
-              <button type="button" className="secondary" onClick={handleCloseCashSession}>Cerrar caja</button>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      {showCashPrompt ? (
-        <div className="panel section" style={{ marginBottom: 12 }}>
-          <h2>Apertura de caja</h2>
-          <p className="label">Para ventas o compras en efectivo, primero abrí la caja con monto inicial.</p>
-          <div className="row">
-            <input type="number" min="0" step="0.01" value={openAmountInput} onChange={(e) => setOpenAmountInput(e.target.value)} />
-            <button type="button" onClick={handleOpenCashSession}>Abrir caja</button>
-            <button type="button" className="secondary" onClick={() => setShowCashPrompt(false)}>Continuar sin abrir</button>
+            </div>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={closeAddToCartModal}>Cancelar</button>
+              <button type="button" onClick={confirmAddProductToSaleCart}>Agregar</button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -719,6 +866,7 @@ export default function DashboardPage() {
       </div>
       <div className="row" style={{ marginBottom: 10 }}>
         <select value={dashboardRange} onChange={(e) => setDashboardRange(e.target.value)} style={{ maxWidth: 280 }}>
+          <option value="today">Metricas: Hoy</option>
           <option value="all">Metricas: Todo el historial</option>
           <option value="month">Metricas: Este mes</option>
           <option value="30d">Metricas: Ultimos 30 dias</option>
@@ -785,6 +933,119 @@ export default function DashboardPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          </>
+        ) : null}
+
+        {!loading && tab === "cash" ? (
+          <>
+            <h2>Gestion de caja</h2>
+            <div className="row" style={{ marginBottom: 12 }}>
+              <div className="panel card">
+                <div className="label">Estado</div>
+                <div className="value" style={{ fontSize: "1.1rem" }}>
+                  {cashSessionInfo.hasOpenSession ? "Caja abierta" : "Sin caja abierta"}
+                </div>
+                <div className="label">
+                  {cashSessionInfo.hasOpenSession
+                    ? `Abierta desde ${new Date(cashSessionInfo.session?.openedAt).toLocaleString()}`
+                    : "Debes abrir una caja para registrar operaciones en efectivo"}
+                </div>
+              </div>
+              <div className="panel card">
+                <div className="label">Apertura actual</div>
+                <div className="value">
+                  {cashSessionInfo.hasOpenSession
+                    ? money.format(Number(cashSessionInfo.summary?.openingAmount || 0))
+                    : "-"}
+                </div>
+              </div>
+              <div className="panel card">
+                <div className="label">Saldo actual</div>
+                <div className="value">
+                  {cashSessionInfo.hasOpenSession
+                    ? money.format(Number(cashSessionInfo.summary?.expectedBalance || 0))
+                    : "-"}
+                </div>
+              </div>
+              <div className="panel card">
+                <div className="label">Diferencia arqueo</div>
+                <div className="value">
+                  {cashSessionInfo.summary?.difference == null
+                    ? "-"
+                    : money.format(Number(cashSessionInfo.summary.difference || 0))}
+                </div>
+              </div>
+            </div>
+
+            <div className="row" style={{ marginBottom: 12 }}>
+              {!cashSessionInfo.hasOpenSession ? (
+                <>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Monto de apertura"
+                    value={openAmountInput}
+                    onChange={(e) => setOpenAmountInput(e.target.value)}
+                  />
+                  <button type="button" onClick={handleOpenCashSession}>Abrir caja</button>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Monto de cierre"
+                    value={closeAmountInput}
+                    onChange={(e) => setCloseAmountInput(e.target.value)}
+                  />
+                  <button type="button" className="danger" onClick={openCloseCashModal}>Cerrar caja</button>
+                </>
+              )}
+            </div>
+
+            <h2>Movimientos en efectivo</h2>
+            <div className="tableWrap">
+              <table>
+                <thead><tr><th>Fecha y hora</th><th>Concepto</th><th>Tipo</th><th>Medio</th><th>Importe</th></tr></thead>
+                <tbody>
+                  {cashSessionMovements.length === 0 ? (
+                    <tr><td colSpan={5}>No hay movimientos en efectivo para esta sesion.</td></tr>
+                  ) : cashSessionMovements.map((m) => (
+                    <tr key={`cashflow-${m.id}`}>
+                      <td>{m.movementAt ? new Date(m.movementAt).toLocaleString() : m.movementDate}</td>
+                      <td>{m.concept}</td>
+                      <td>{m.type === "COLLECTION" ? "Ingreso" : "Egreso"}</td>
+                      <td>{m.PaymentMethod?.name || "-"}</td>
+                      <td>{money.format(Number(m.amount || 0))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <h2 style={{ marginTop: 16 }}>Historial de arqueos</h2>
+            <div className="tableWrap">
+              <table>
+                <thead><tr><th>Apertura</th><th>Cierre</th><th>Apertura declarada</th><th>Esperado al cierre</th><th>Contado al cierre</th><th>Diferencia</th><th>Estado</th></tr></thead>
+                <tbody>
+                  {(cashSessionInfo.recentSessions || []).length === 0 ? (
+                    <tr><td colSpan={7}>Sin sesiones registradas.</td></tr>
+                  ) : (cashSessionInfo.recentSessions || []).map((s) => (
+                    <tr key={`session-${s.id}`}>
+                      <td>{s.openedAt ? new Date(s.openedAt).toLocaleString() : "-"}</td>
+                      <td>{s.closedAt ? new Date(s.closedAt).toLocaleString() : "-"}</td>
+                      <td>{money.format(Number(s.openingAmount || 0))}</td>
+                      <td>{s.expectedClosingAmount == null ? "-" : money.format(Number(s.expectedClosingAmount || 0))}</td>
+                      <td>{s.closingAmount == null ? "-" : money.format(Number(s.closingAmount || 0))}</td>
+                      <td>{s.closingDifferenceAmount == null ? "-" : money.format(Number(s.closingDifferenceAmount || 0))}</td>
+                      <td>{s.status === "OPEN" ? "Abierta" : "Cerrada"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </>
         ) : null}
@@ -876,7 +1137,9 @@ export default function DashboardPage() {
             </div>
 
             {showNewSaleForm ? (
-              <form className="grid" onSubmit={handleSale} style={{ marginBottom: 14 }}>
+              <div className="panel section sectionBlock">
+                <h3 className="sectionTitle">Nueva venta</h3>
+                <form className="grid" onSubmit={handleSale}>
                 <div className="row">
                   <select required value={saleForm.clientId} onChange={(e) => setSaleForm((s) => ({ ...s, clientId: e.target.value }))}><option value="">Cliente</option>{data.clients.map((x) => <option key={x.id} value={x.id}>{x.fullName}</option>)}</select>
                   <input value={sessionUser.name} disabled />
@@ -907,10 +1170,13 @@ export default function DashboardPage() {
                   <button type="submit">Guardar venta</button>
                   <button type="button" className="secondary" onClick={() => setShowNewSaleForm(false)}>Cancelar</button>
                 </div>
-              </form>
+                </form>
+              </div>
             ) : null}
 
-            <div className="tableWrap">
+            <div className="panel section sectionBlock">
+              <h3 className="sectionTitle">Historial de ventas</h3>
+              <div className="tableWrap">
               <table>
                 <thead><tr><th>Fecha</th><th>Comprobante</th><th>Cliente</th><th>Vendedor</th><th>Deposito</th><th>Pago</th><th>Total</th><th>Detalle</th></tr></thead>
                 <tbody>
@@ -922,7 +1188,7 @@ export default function DashboardPage() {
                         <td>{sale.clientName}</td>
                         <td>{sale.userName}</td>
                         <td>{sale.warehouseName}</td>
-                        <td>{saleDetailById[sale.id]?.SalePayments?.[0]?.PaymentMethod?.name || "-"}</td>
+                        <td>{sale.paymentMethodName}</td>
                         <td>{money.format(sale.total)}</td>
                         <td>
                           <button
@@ -959,6 +1225,7 @@ export default function DashboardPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </>
         ) : null}
@@ -1009,7 +1276,7 @@ export default function DashboardPage() {
 
             <div className="tableWrap">
               <table>
-                <thead><tr><th>Fecha</th><th>Comprobante</th><th>Proveedor</th><th>Usuario</th><th>Deposito</th><th>Total</th><th>Detalle</th></tr></thead>
+                <thead><tr><th>Fecha</th><th>Comprobante</th><th>Proveedor</th><th>Usuario</th><th>Deposito</th><th>Pago</th><th>Total</th><th>Detalle</th></tr></thead>
                 <tbody>
                   {purchasesListRows.map((purchase) => (
                     <Fragment key={`purchase-list-${purchase.id}`}>
@@ -1019,12 +1286,13 @@ export default function DashboardPage() {
                         <td>{purchase.supplierName}</td>
                         <td>{purchase.userName}</td>
                         <td>{purchase.warehouseName}</td>
+                        <td>{purchase.paymentMethodName}</td>
                         <td>{money.format(purchase.total)}</td>
                         <td><button type="button" className="secondary" onClick={() => handleTogglePurchaseDetail(purchase.id)}>{expandedPurchaseId === purchase.id ? "Ocultar detalle" : "Ver detalle"}</button></td>
                       </tr>
                       {expandedPurchaseId === purchase.id ? (
                         <tr>
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="tableWrap">
                               <table style={{ minWidth: 500 }}>
                                 <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unitario</th><th>Subtotal</th></tr></thead>
@@ -1194,7 +1462,120 @@ export default function DashboardPage() {
             </div>
           </>
         ) : null}
+
+        {!loading && tab === "contacts" && canOperate ? (
+          <>
+            <h2>Clientes y proveedores</h2>
+            <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+              <div className="panel section">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <h3 style={{ margin: 0 }}>Clientes actuales</h3>
+                  <button type="button" className="secondary" onClick={() => setShowClientForm((v) => !v)}>
+                    {showClientForm ? "Cancelar" : "Agregar"}
+                  </button>
+                </div>
+                {showClientForm ? (
+                  <form className="grid" onSubmit={handleClient} style={{ marginBottom: 12 }}>
+                    <input
+                      required
+                      placeholder="Nombre completo"
+                      value={clientForm.fullName}
+                      onChange={(e) => setClientForm((s) => ({ ...s, fullName: e.target.value }))}
+                    />
+                    <input
+                      placeholder="CUIT / DNI"
+                      value={clientForm.taxId}
+                      onChange={(e) => setClientForm((s) => ({ ...s, taxId: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Telefono"
+                      value={clientForm.phone}
+                      onChange={(e) => setClientForm((s) => ({ ...s, phone: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Direccion"
+                      value={clientForm.address}
+                      onChange={(e) => setClientForm((s) => ({ ...s, address: e.target.value }))}
+                    />
+                    <button type="submit">Crear cliente</button>
+                  </form>
+                ) : null}
+                <div className="tableWrap">
+                  <table style={{ minWidth: 520 }}>
+                    <thead><tr><th>Nombre</th><th>CUIT/DNI</th><th>Telefono</th><th>Direccion</th></tr></thead>
+                    <tbody>
+                      {data.clients.map((c) => (
+                        <tr key={`client-${c.id}`}>
+                          <td>{c.fullName}</td>
+                          <td>{c.taxId || "-"}</td>
+                          <td>{c.phone || "-"}</td>
+                          <td>{c.address || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="panel section">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <h3 style={{ margin: 0 }}>Proveedores actuales</h3>
+                  <button type="button" className="secondary" onClick={() => setShowSupplierForm((v) => !v)}>
+                    {showSupplierForm ? "Cancelar" : "Agregar"}
+                  </button>
+                </div>
+                {showSupplierForm ? (
+                  <form className="grid" onSubmit={handleSupplier} style={{ marginBottom: 12 }}>
+                    <input
+                      required
+                      placeholder="Razon social"
+                      value={supplierForm.businessName}
+                      onChange={(e) => setSupplierForm((s) => ({ ...s, businessName: e.target.value }))}
+                    />
+                    <input
+                      placeholder="CUIT"
+                      value={supplierForm.taxId}
+                      onChange={(e) => setSupplierForm((s) => ({ ...s, taxId: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Telefono"
+                      value={supplierForm.phone}
+                      onChange={(e) => setSupplierForm((s) => ({ ...s, phone: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Direccion"
+                      value={supplierForm.address}
+                      onChange={(e) => setSupplierForm((s) => ({ ...s, address: e.target.value }))}
+                    />
+                    <button type="submit">Crear proveedor</button>
+                  </form>
+                ) : null}
+                <div className="tableWrap">
+                  <table style={{ minWidth: 520 }}>
+                    <thead><tr><th>Razon social</th><th>CUIT</th><th>Telefono</th><th>Direccion</th></tr></thead>
+                    <tbody>
+                      {data.suppliers.map((s) => (
+                        <tr key={`supplier-${s.id}`}>
+                          <td>{s.businessName}</td>
+                          <td>{s.taxId || "-"}</td>
+                          <td>{s.phone || "-"}</td>
+                          <td>{s.address || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
+
+      {canOperate ? (
+        <button type="button" className="floatingSaleButton" onClick={openNewSaleForm}>
+          Nueva venta
+        </button>
+      ) : null}
     </main>
   );
 }

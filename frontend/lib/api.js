@@ -110,6 +110,22 @@ export async function createProduct(payload, token) {
   });
 }
 
+export async function createClient(payload, token) {
+  return request('/clients', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createSupplier(payload, token) {
+  return request('/suppliers', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function getMyCashSession(token) {
   return request('/cash-sessions/me', {
     headers: authHeaders(token),

@@ -139,11 +139,14 @@ const CashSession = sequelize.define('CashSession', {
   openingAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
   closedAt: { type: DataTypes.DATE, allowNull: true },
   closingAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+  expectedClosingAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+  closingDifferenceAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
   status: { type: DataTypes.ENUM('OPEN', 'CLOSED'), allowNull: false, defaultValue: 'OPEN' },
 }, { tableName: 'cash_sessions' });
 
 const Cashflow = sequelize.define('Cashflow', {
   movementDate: { type: DataTypes.DATEONLY, allowNull: false },
+  movementAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   concept: { type: DataTypes.STRING, allowNull: false },
   amount: { type: DataTypes.DECIMAL(14, 2), allowNull: false },
   type: { type: DataTypes.ENUM('PAYMENT', 'COLLECTION'), allowNull: false },
@@ -226,6 +229,10 @@ Sale.hasMany(SalePayment, { foreignKey: 'saleId' });
 SalePayment.belongsTo(Sale, { foreignKey: 'saleId' });
 User.hasMany(CashSession, { foreignKey: 'userId' });
 CashSession.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(Cashflow, { foreignKey: 'userId' });
+Cashflow.belongsTo(User, { foreignKey: 'userId' });
+CashSession.hasMany(Cashflow, { foreignKey: 'cashSessionId' });
+Cashflow.belongsTo(CashSession, { foreignKey: 'cashSessionId' });
 
 AccountType.hasMany(Account, { foreignKey: 'accountTypeId' });
 Account.belongsTo(AccountType, { foreignKey: 'accountTypeId' });
