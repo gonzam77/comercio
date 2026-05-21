@@ -100,6 +100,8 @@ module.exports = (models) => {
   SalePayment.belongsTo(Sale, { foreignKey: 'saleId' });
   User.hasMany(CashSession, { foreignKey: 'userId' });
   CashSession.belongsTo(User, { foreignKey: 'userId' });
+  Warehouse.hasMany(CashSession, { foreignKey: 'warehouseId' });
+  CashSession.belongsTo(Warehouse, { foreignKey: 'warehouseId' });
   User.hasMany(Cashflow, { foreignKey: 'userId' });
   Cashflow.belongsTo(User, { foreignKey: 'userId' });
   CashSession.hasMany(Cashflow, { foreignKey: 'cashSessionId' });

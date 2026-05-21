@@ -1,6 +1,6 @@
 const { Sale, SaleDetail, CurrentAccountEntry, Product, Client, Warehouse, User, PaymentMethod, SalePayment, Cashflow } = require('../models');
 const { createMovement, withTransaction } = require('../services/inventory.service');
-const { requireOpenCashSession } = require('../services/cash-session.service');
+const { requireOpenCashSession, getContextWarehouseId } = require('../services/cash-session.service');
 
 async function listSales(_req, res, next) {
   try {
@@ -51,6 +51,8 @@ async function createSale(req, res, next) {
   try {
     const { clientId, warehouseId, saleDate, invoiceNumber, paymentMethodId, details } = req.body;
     const userId = Number(req.user?.sub);
+    const selectedWarehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    const targetWarehouseId = Number(warehouseId);
 
     if (!details || !Array.isArray(details) || details.length === 0) {
       return res.status(400).json({ message: 'El detalle es obligatorio' });
@@ -63,6 +65,12 @@ async function createSale(req, res, next) {
     if (!userId) {
       return res.status(401).json({ message: 'Usuario autenticado invalido' });
     }
+    if (!targetWarehouseId) {
+      return res.status(400).json({ message: 'El deposito es obligatorio' });
+    }
+    if (selectedWarehouseId && selectedWarehouseId !== targetWarehouseId) {
+      return res.status(400).json({ message: 'La venta debe registrarse en el punto de venta seleccionado' });
+    }
 
     const data = await withTransaction(async (t) => {
       const method = await PaymentMethod.findByPk(paymentMethodId, { transaction: t });
@@ -74,7 +82,7 @@ async function createSale(req, res, next) {
 
       let cashSession = null;
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
-        cashSession = await requireOpenCashSession({ userId, t });
+        cashSession = await requireOpenCashSession({ warehouseId: targetWarehouseId, t });
       }
 
       const normalizedDetails = [];
@@ -109,7 +117,7 @@ async function createSale(req, res, next) {
         movementTypeCode: 'VENTA',
         movementDate: saleDate,
         userId,
-        warehouseFromId: warehouseId,
+        warehouseFromId: targetWarehouseId,
         details: normalizedDetails.map((d) => ({
           productId: d.productId,
           quantity: d.quantity,
@@ -121,7 +129,7 @@ async function createSale(req, res, next) {
       const sale = await Sale.create({
         clientId,
         userId,
-        warehouseId,
+        warehouseId: targetWarehouseId,
         saleDate,
         invoiceNumber,
         total,

@@ -1,6 +1,6 @@
 const { Purchase, PurchaseDetail, CurrentAccountEntry, Product, Supplier, Warehouse, User, PaymentMethod, Cashflow } = require('../models');
 const { createMovement, withTransaction } = require('../services/inventory.service');
-const { requireOpenCashSession } = require('../services/cash-session.service');
+const { requireOpenCashSession, getContextWarehouseId } = require('../services/cash-session.service');
 
 async function listPurchases(_req, res, next) {
   try {
@@ -43,6 +43,8 @@ async function createPurchase(req, res, next) {
   try {
     const { supplierId, warehouseId, purchaseDate, invoiceNumber, paymentMethodId, details } = req.body;
     const userId = Number(req.user?.sub);
+    const selectedWarehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    const targetWarehouseId = Number(warehouseId);
 
     if (!details || !Array.isArray(details) || details.length === 0) {
       return res.status(400).json({ message: 'El detalle es obligatorio' });
@@ -54,6 +56,12 @@ async function createPurchase(req, res, next) {
 
     if (!userId) {
       return res.status(401).json({ message: 'Usuario autenticado invalido' });
+    }
+    if (!targetWarehouseId) {
+      return res.status(400).json({ message: 'El deposito es obligatorio' });
+    }
+    if (selectedWarehouseId && selectedWarehouseId !== targetWarehouseId) {
+      return res.status(400).json({ message: 'La compra debe registrarse en el punto de venta seleccionado' });
     }
 
     const total = details.reduce((acc, d) => acc + Number(d.quantity) * Number(d.unitPrice), 0);
@@ -68,14 +76,14 @@ async function createPurchase(req, res, next) {
 
       let cashSession = null;
       if (String(method.name).toUpperCase() === 'EFECTIVO') {
-        cashSession = await requireOpenCashSession({ userId, t });
+        cashSession = await requireOpenCashSession({ warehouseId: targetWarehouseId, t });
       }
 
       const movement = await createMovement({
         movementTypeCode: 'COMPRA',
         movementDate: purchaseDate,
         userId,
-        warehouseToId: warehouseId,
+        warehouseToId: targetWarehouseId,
         details: details.map((d) => ({
           productId: d.productId,
           quantity: d.quantity,
@@ -87,7 +95,7 @@ async function createPurchase(req, res, next) {
       const purchase = await Purchase.create({
         supplierId,
         userId,
-        warehouseId,
+        warehouseId: targetWarehouseId,
         purchaseDate,
         invoiceNumber,
         total,

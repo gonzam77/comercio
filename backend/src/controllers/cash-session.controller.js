@@ -1,4 +1,8 @@
 const { CashSession, Cashflow, PaymentMethod } = require('../models');
+const { User, Role } = require('../models');
+const bcrypt = require('bcryptjs');
+const { requireOpenCashSession, getContextWarehouseId } = require('../services/cash-session.service');
+const { withTransaction } = require('../services/inventory.service');
 
 function calculateSessionSummary(session, movements) {
   const openingAmount = Number(session?.openingAmount || 0);
@@ -35,13 +39,17 @@ async function getSessionMovements(sessionId) {
 async function getMyCashSession(req, res, next) {
   try {
     const userId = Number(req.user?.sub);
+    const warehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    if (!warehouseId) {
+      return res.status(400).json({ message: 'Debes seleccionar un punto de venta' });
+    }
     const openSession = await CashSession.findOne({
-      where: { userId, status: 'OPEN' },
+      where: { warehouseId, status: 'OPEN' },
       order: [['openedAt', 'DESC']],
     });
 
     const targetSession = openSession || await CashSession.findOne({
-      where: { userId },
+      where: { warehouseId },
       order: [['openedAt', 'DESC']],
     });
 
@@ -52,7 +60,7 @@ async function getMyCashSession(req, res, next) {
     const movements = await getSessionMovements(targetSession.id);
     const summary = calculateSessionSummary(targetSession, movements);
     const recentSessions = await CashSession.findAll({
-      where: { userId },
+      where: { warehouseId },
       order: [['openedAt', 'DESC']],
       limit: 30,
     });
@@ -71,11 +79,15 @@ async function getMyCashSession(req, res, next) {
 async function openCashSession(req, res, next) {
   try {
     const userId = Number(req.user?.sub);
+    const warehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    if (!warehouseId) {
+      return res.status(400).json({ message: 'Debes seleccionar un punto de venta' });
+    }
     const { openingAmount } = req.body;
 
-    const existing = await CashSession.findOne({ where: { userId, status: 'OPEN' } });
+    const existing = await CashSession.findOne({ where: { warehouseId, status: 'OPEN' } });
     if (existing) {
-      return res.status(400).json({ message: 'Ya existe una caja abierta para este usuario' });
+      return res.status(400).json({ message: 'Ya existe una caja abierta para este punto de venta' });
     }
 
     const amount = Number(openingAmount);
@@ -85,6 +97,7 @@ async function openCashSession(req, res, next) {
 
     const session = await CashSession.create({
       userId,
+      warehouseId,
       openingAmount: amount,
       openedAt: new Date(),
       status: 'OPEN',
@@ -109,15 +122,25 @@ async function openCashSession(req, res, next) {
 
 async function closeCashSession(req, res, next) {
   try {
-    const userId = Number(req.user?.sub);
+    const warehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    if (!warehouseId) {
+      return res.status(400).json({ message: 'Debes seleccionar un punto de venta' });
+    }
     const { closingAmount } = req.body;
 
     const session = await CashSession.findOne({
-      where: { userId, status: 'OPEN' },
+      where: { warehouseId, status: 'OPEN' },
       order: [['openedAt', 'DESC']],
     });
 
     if (!session) {
+      const lastSession = await CashSession.findOne({
+        where: { warehouseId },
+        order: [['openedAt', 'DESC']],
+      });
+      if (lastSession && lastSession.status === 'CLOSED') {
+        return res.status(409).json({ message: 'La caja ya fue cerrada por otro usuario' });
+      }
       return res.status(400).json({ message: 'No hay una caja abierta para cerrar' });
     }
 
@@ -149,8 +172,69 @@ async function closeCashSession(req, res, next) {
   }
 }
 
+async function withdrawFromCashSession(req, res, next) {
+  try {
+    const warehouseId = getContextWarehouseId(req, { requiredForSeller: true });
+    if (!warehouseId) {
+      return res.status(400).json({ message: 'Debes seleccionar un punto de venta' });
+    }
+    const { amount, adminPassword } = req.body || {};
+
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ message: 'El monto del retiro es invalido' });
+    }
+    if (!adminPassword || !String(adminPassword).trim()) {
+      return res.status(400).json({ message: 'La contrasena de administrador es obligatoria' });
+    }
+
+    const admins = await User.findAll({
+      where: { active: true },
+      include: [{
+        model: Role,
+        where: { name: 'ADMIN' },
+        through: { attributes: [] },
+      }],
+    });
+
+    let authorizingAdmin = null;
+    for (const admin of admins) {
+      const ok = await bcrypt.compare(String(adminPassword), String(admin.password || ''));
+      if (ok) {
+        authorizingAdmin = admin;
+        break;
+      }
+    }
+
+    if (!authorizingAdmin) {
+      return res.status(401).json({ message: 'Contrasena de administrador invalida' });
+    }
+
+    const result = await withTransaction(async (t) => {
+      const session = await requireOpenCashSession({ warehouseId, t });
+      const now = new Date();
+      const cashflow = await Cashflow.create({
+        movementDate: now.toISOString().slice(0, 10),
+        movementAt: now,
+        concept: `Retiro de caja autorizado por ${authorizingAdmin.name}`,
+        amount: numericAmount,
+        type: 'PAYMENT',
+        userId: authorizingAdmin.id,
+        cashSessionId: session.id,
+      }, { transaction: t });
+
+      return { cashflow, sessionId: session.id };
+    });
+
+    return res.status(201).json(result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getMyCashSession,
   openCashSession,
   closeCashSession,
+  withdrawFromCashSession,
 };

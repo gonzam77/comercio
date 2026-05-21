@@ -3,7 +3,8 @@ const registerCrudRoutes = require('./crud.routes');
 const master = require('../controllers/master.controller');
 const { listPurchases, getPurchaseById, createPurchase } = require('../controllers/purchase.controller');
 const { listSales, getSaleById, createSale } = require('../controllers/sale.controller');
-const { getMyCashSession, openCashSession, closeCashSession } = require('../controllers/cash-session.controller');
+const { getMyCashSession, openCashSession, closeCashSession, withdrawFromCashSession } = require('../controllers/cash-session.controller');
+const { createInventoryAdjustment } = require('../controllers/inventory-adjustment.controller');
 const { login } = require('../controllers/auth.controller');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth.middleware');
 
@@ -16,6 +17,8 @@ router.post('/auth/login', login);
 router.get('/cash-sessions/me', ...canRead, getMyCashSession);
 router.post('/cash-sessions/open', ...canRead, openCashSession);
 router.post('/cash-sessions/close', ...canRead, closeCashSession);
+router.post('/cash-sessions/withdraw', ...canRead, withdrawFromCashSession);
+router.post('/inventory-adjustments', ...commercialWrite, createInventoryAdjustment);
 
 registerCrudRoutes(router, '/users', master.users, { readMiddlewares: adminWrite, writeMiddlewares: adminWrite });
 registerCrudRoutes(router, '/roles', master.roles, { readMiddlewares: adminWrite, writeMiddlewares: adminWrite });

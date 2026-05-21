@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { closeCashSession, createClient, createProduct, createPurchase, createSale, createSupplier, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession } from "../lib/api";
+import { closeCashSession, createClient, createInventoryAdjustment, createProduct, createPurchase, createSale, createSupplier, createUser, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession, updateClient, updateProduct, updateSupplier, updateUser, withdrawCashSession } from "../lib/api";
 import DashboardTab from "./components/tabs/DashboardTab";
 import CashTab from "./components/tabs/CashTab";
 import SalesListTab from "./components/tabs/SalesListTab";
@@ -9,6 +9,7 @@ import PurchasesListTab from "./components/tabs/PurchasesListTab";
 import ProductsTab from "./components/tabs/ProductsTab";
 import OperationsTab from "./components/tabs/OperationsTab";
 import ContactsTab from "./components/tabs/ContactsTab";
+import UsersTab from "./components/tabs/UsersTab";
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 3 });
@@ -29,6 +30,8 @@ export default function DashboardPage() {
   const [tab, setTab] = useState("dashboard");
   const [token, setToken] = useState("");
   const [sessionUser, setSessionUser] = useState(null);
+  const [selectedPosWarehouseId, setSelectedPosWarehouseId] = useState("");
+  const [showPosSelectionModal, setShowPosSelectionModal] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 
   const [data, setData] = useState({
@@ -36,6 +39,7 @@ export default function DashboardPage() {
     brands: [],
     clients: [],
     suppliers: [],
+    roles: [],
     users: [],
     warehouses: [],
     paymentMethods: [],
@@ -69,11 +73,6 @@ export default function DashboardPage() {
     details: [emptyDetail()],
   });
 
-  const [productForm, setProductForm] = useState({ sku: "", name: "", brandId: "", costPrice: "", salePrice: "" });
-  const [clientForm, setClientForm] = useState({ fullName: "", taxId: "", phone: "", address: "" });
-  const [supplierForm, setSupplierForm] = useState({ businessName: "", taxId: "", phone: "", address: "" });
-  const [showClientForm, setShowClientForm] = useState(false);
-  const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [expandedMovementId, setExpandedMovementId] = useState(null);
   const [expandedSaleId, setExpandedSaleId] = useState(null);
   const [expandedPurchaseId, setExpandedPurchaseId] = useState(null);
@@ -88,8 +87,12 @@ export default function DashboardPage() {
   const [cashSessionInfo, setCashSessionInfo] = useState({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
   const [showCashPrompt, setShowCashPrompt] = useState(false);
   const [openAmountInput, setOpenAmountInput] = useState("0");
+  const [showOpenCashModal, setShowOpenCashModal] = useState(false);
   const [closeAmountInput, setCloseAmountInput] = useState("");
   const [showCloseCashModal, setShowCloseCashModal] = useState(false);
+  const [showWithdrawCashModal, setShowWithdrawCashModal] = useState(false);
+  const [withdrawAmountInput, setWithdrawAmountInput] = useState("");
+  const [withdrawAdminPassword, setWithdrawAdminPassword] = useState("");
   const [cartProductModal, setCartProductModal] = useState({ open: false, product: null, quantity: "1" });
 
   const roles = sessionUser?.roles || [];
@@ -103,6 +106,7 @@ export default function DashboardPage() {
     try {
       const res = await getInitialData(authToken);
       setData(res);
+      return res;
     } catch (e) {
       if (e.status === 401) {
         handleLogout();
@@ -110,9 +114,43 @@ export default function DashboardPage() {
       } else {
         setStatus({ type: "error", text: e.message });
       }
+      return null;
     } finally {
       setLoading(false);
     }
+  }
+
+  function persistSelectedPosWarehouse(warehouseId) {
+    const value = String(warehouseId || "");
+    localStorage.setItem("comercio_pos_warehouse_id", value);
+    setSelectedPosWarehouseId(value);
+  }
+
+  function resolveAndSetSellerPos(user, warehouses) {
+    const isSellerUser = (user?.roles || []).includes("VENDEDOR");
+    if (!isSellerUser) {
+      setShowPosSelectionModal(false);
+      return "";
+    }
+
+    const saved = localStorage.getItem("comercio_pos_warehouse_id") || "";
+    const exists = warehouses.some((w) => String(w.id) === String(saved));
+    if (exists) {
+      setSelectedPosWarehouseId(String(saved));
+      setShowPosSelectionModal(false);
+      return String(saved);
+    }
+
+    if (warehouses.length === 1) {
+      const onlyId = String(warehouses[0].id);
+      persistSelectedPosWarehouse(onlyId);
+      setShowPosSelectionModal(false);
+      return onlyId;
+    }
+
+    setSelectedPosWarehouseId(warehouses[0] ? String(warehouses[0].id) : "");
+    setShowPosSelectionModal(true);
+    return "";
   }
 
   async function refreshCashSession(authToken) {
@@ -149,10 +187,16 @@ export default function DashboardPage() {
       const user = JSON.parse(savedUser);
       setToken(savedToken);
       setSessionUser(user);
-      load(savedToken);
-      refreshCashSession(savedToken).then((info) => {
-        setShowCashPrompt(Boolean(info && !info.hasOpenSession));
-      }).catch(() => {});
+      load(savedToken).then((loaded) => {
+        const warehouses = loaded?.warehouses || [];
+        const selected = resolveAndSetSellerPos(user, warehouses);
+        const shouldLoadCash = !(user.roles || []).includes("VENDEDOR") || Boolean(selected);
+        if (shouldLoadCash) {
+          refreshCashSession(savedToken).then((info) => {
+            setShowCashPrompt(Boolean(info && !info.hasOpenSession));
+          }).catch(() => {});
+        }
+      });
     }
   }, []);
 
@@ -214,6 +258,7 @@ export default function DashboardPage() {
   const movementSummaryRows = useMemo(() => {
     const userById = new Map(data.users.map((u) => [u.id, u]));
     const warehouseById = new Map(data.warehouses.map((w) => [w.id, w]));
+    const movementTypeById = new Map(data.movementTypes.map((mt) => [mt.id, mt]));
     const saleRows = data.sales.map((sale) => {
       const client = data.clients.find((c) => c.id === sale.clientId);
       const userName = userById.get(sale.userId)?.name || `Usuario ${sale.userId}`;
@@ -258,7 +303,45 @@ export default function DashboardPage() {
       };
     });
 
-    return [...saleRows, ...purchaseRows].sort((a, b) => String(b.movementDate).localeCompare(String(a.movementDate)));
+    const adjustmentRows = data.movements
+      .filter((m) => {
+        const type = movementTypeById.get(m.movementTypeId);
+        const code = String(type?.code || "").toUpperCase();
+        const name = String(type?.name || "").toUpperCase();
+        return code === "AJUSTE" || name === "AJUSTE";
+      })
+      .map((movement) => {
+        const userName = userById.get(movement.userId)?.name || `Usuario ${movement.userId}`;
+        const warehouseName = warehouseById.get(movement.warehouseFromId)?.name
+          || warehouseById.get(movement.warehouseToId)?.name
+          || "-";
+        const detailRows = data.movementDetails
+          .filter((d) => d.movementId === movement.id)
+          .map((d) => {
+            const product = data.products.find((p) => p.id === d.productId);
+            return {
+              productName: product?.name || `Producto ${d.productId}`,
+              quantity: Number(d.quantity || 0),
+              unitPrice: Number(d.unitCost || 0),
+            };
+          });
+
+        return {
+          id: `adjustment-${movement.id}`,
+          typeName: "Ajuste",
+          movementDate: movement.movementDate,
+          userName,
+          fromName: warehouseName,
+          toName: "-",
+          counterparty: "-",
+          document: movement.docNumber || `Ajuste ${movement.id}`,
+          total: 0,
+          detailRows,
+        };
+      });
+
+    return [...saleRows, ...purchaseRows, ...adjustmentRows]
+      .sort((a, b) => String(b.movementDate).localeCompare(String(a.movementDate)));
   }, [data]);
 
   const salesListRows = useMemo(() => {
@@ -388,9 +471,16 @@ export default function DashboardPage() {
       setToken(res.token);
       setSessionUser(res.user);
       setStatus({ type: "ok", text: `Bienvenido ${res.user.name}` });
-      await load(res.token);
-      const info = await refreshCashSession(res.token);
-      setShowCashPrompt(Boolean(info && !info.hasOpenSession));
+      const loaded = await load(res.token);
+      const warehouses = loaded?.warehouses || [];
+      const selected = resolveAndSetSellerPos(res.user, warehouses);
+      const shouldLoadCash = !(res.user.roles || []).includes("VENDEDOR") || Boolean(selected);
+      if (shouldLoadCash) {
+        const info = await refreshCashSession(res.token);
+        setShowCashPrompt(Boolean(info && !info.hasOpenSession));
+      } else {
+        setShowCashPrompt(false);
+      }
     } catch (e2) {
       setStatus({ type: "error", text: e2.message });
     }
@@ -399,8 +489,11 @@ export default function DashboardPage() {
   function handleLogout() {
     localStorage.removeItem("comercio_token");
     localStorage.removeItem("comercio_user");
+    localStorage.removeItem("comercio_pos_warehouse_id");
     setToken("");
     setSessionUser(null);
+    setSelectedPosWarehouseId("");
+    setShowPosSelectionModal(false);
     setCashSessionInfo({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
     setShowCashPrompt(false);
     setSaleDetailById({});
@@ -410,6 +503,7 @@ export default function DashboardPage() {
       brands: [],
       clients: [],
       suppliers: [],
+      roles: [],
       users: [],
       warehouses: [],
       paymentMethods: [],
@@ -443,9 +537,32 @@ export default function DashboardPage() {
       setShowCashPrompt(false);
       setCloseAmountInput("");
       setStatus({ type: "ok", text: "Caja abierta correctamente" });
+      return true;
     } catch (error) {
       setStatus({ type: "error", text: error.message });
+      return false;
     }
+  }
+
+  async function confirmPosSelection() {
+    if (!selectedPosWarehouseId) {
+      setStatus({ type: "error", text: "Debes seleccionar un punto de venta" });
+      return;
+    }
+    persistSelectedPosWarehouse(selectedPosWarehouseId);
+    setShowPosSelectionModal(false);
+    const info = await refreshCashSession(token);
+    setShowCashPrompt(Boolean(info && !info.hasOpenSession));
+    setStatus({ type: "ok", text: "Punto de venta seleccionado correctamente" });
+  }
+
+  function openOpenCashModal() {
+    setOpenAmountInput("0");
+    setShowOpenCashModal(true);
+  }
+
+  function closeOpenCashModal() {
+    setShowOpenCashModal(false);
   }
 
   async function handleCloseCashSession() {
@@ -461,6 +578,9 @@ export default function DashboardPage() {
       setStatus({ type: "ok", text: "Caja cerrada correctamente" });
       return true;
     } catch (error) {
+      try {
+        await refreshCashSession(token);
+      } catch (_syncError) {}
       setStatus({ type: "error", text: error.message });
       return false;
     }
@@ -474,9 +594,47 @@ export default function DashboardPage() {
     setShowCloseCashModal(false);
   }
 
+  function openWithdrawCashModal() {
+    setWithdrawAmountInput("");
+    setWithdrawAdminPassword("");
+    setShowWithdrawCashModal(true);
+  }
+
+  function closeWithdrawCashModal() {
+    setShowWithdrawCashModal(false);
+  }
+
   async function confirmCloseCashSession() {
     const ok = await handleCloseCashSession();
     if (ok) closeCloseCashModal();
+  }
+
+  async function confirmOpenCashSession() {
+    const ok = await handleOpenCashSession();
+    if (ok) setShowOpenCashModal(false);
+  }
+
+  async function confirmWithdrawCashSession() {
+    try {
+      const amount = Number(withdrawAmountInput);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setStatus({ type: "error", text: "Monto de retiro invalido" });
+        return;
+      }
+      if (!withdrawAdminPassword.trim()) {
+        setStatus({ type: "error", text: "Debes ingresar una contrasena de administrador" });
+        return;
+      }
+
+      await withdrawCashSession({ amount, adminPassword: withdrawAdminPassword }, token);
+      await refreshCashSession(token);
+      setShowWithdrawCashModal(false);
+      setWithdrawAmountInput("");
+      setWithdrawAdminPassword("");
+      setStatus({ type: "ok", text: "Retiro de caja registrado correctamente" });
+    } catch (error) {
+      setStatus({ type: "error", text: error.message });
+    }
   }
 
   async function handleToggleSaleDetail(saleId) {
@@ -575,28 +733,50 @@ export default function DashboardPage() {
   }
 
   function openNewSaleForm() {
+    if (showNewSaleForm) {
+      setTab("sales-list");
+      return;
+    }
+
     const defaultPaymentMethod = data.paymentMethods.find((p) => String(p.name || "").toUpperCase() === "EFECTIVO");
+    const firstClient = data.clients[0];
+    const firstWarehouse = data.warehouses[0];
+    const firstPaymentMethod = data.paymentMethods[0];
     setShowNewSaleForm(true);
     setTab("sales-list");
     setSaleForm((s) => ({
       ...s,
-      clientId: defaultConsumerClientId || s.clientId,
+      clientId: defaultConsumerClientId || s.clientId || (firstClient ? String(firstClient.id) : ""),
+      warehouseId: isSeller
+        ? (selectedPosWarehouseId || (firstWarehouse ? String(firstWarehouse.id) : ""))
+        : (s.warehouseId || (firstWarehouse ? String(firstWarehouse.id) : "")),
       saleDate: today(),
       invoiceNumber: "",
-      paymentMethodId: defaultPaymentMethod ? String(defaultPaymentMethod.id) : s.paymentMethodId,
+      paymentMethodId: defaultPaymentMethod
+        ? String(defaultPaymentMethod.id)
+        : (s.paymentMethodId || (firstPaymentMethod ? String(firstPaymentMethod.id) : "")),
       details: [emptyDetail()],
     }));
   }
 
   function openNewPurchaseForm() {
     const defaultPaymentMethod = data.paymentMethods.find((p) => String(p.name || "").toUpperCase() === "EFECTIVO");
+    const firstSupplier = data.suppliers[0];
+    const firstWarehouse = data.warehouses[0];
+    const firstPaymentMethod = data.paymentMethods[0];
     setShowNewPurchaseForm(true);
     setTab("purchases-list");
     setPurchaseForm((s) => ({
       ...s,
+      supplierId: s.supplierId || (firstSupplier ? String(firstSupplier.id) : ""),
+      warehouseId: isSeller
+        ? (selectedPosWarehouseId || (firstWarehouse ? String(firstWarehouse.id) : ""))
+        : (s.warehouseId || (firstWarehouse ? String(firstWarehouse.id) : "")),
       purchaseDate: today(),
       invoiceNumber: "",
-      paymentMethodId: defaultPaymentMethod ? String(defaultPaymentMethod.id) : s.paymentMethodId,
+      paymentMethodId: defaultPaymentMethod
+        ? String(defaultPaymentMethod.id)
+        : (s.paymentMethodId || (firstPaymentMethod ? String(firstPaymentMethod.id) : "")),
       details: [emptyDetail()],
     }));
   }
@@ -637,6 +817,12 @@ export default function DashboardPage() {
     const details = sanitizeSaleDetails(saleForm.details);
     if (details.length === 0) {
       setStatus({ type: "error", text: "Debes agregar al menos un producto valido en el detalle." });
+      return;
+    }
+
+    const hasOutOfStockProduct = details.some((d) => Number(stockByProduct.get(d.productId) || 0) <= 0);
+    if (hasOutOfStockProduct) {
+      setStatus({ type: "error", text: "No puedes vender productos sin stock disponible." });
       return;
     }
 
@@ -690,66 +876,144 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleProduct(e) {
-    e.preventDefault();
+  async function handleCreateProduct(payload) {
     try {
       await createProduct(
         {
-          sku: productForm.sku,
-          name: productForm.name,
-          brandId: Number(productForm.brandId) || null,
-          costPrice: Number(productForm.costPrice || 0),
-          salePrice: Number(productForm.salePrice || 0),
+          sku: payload.sku,
+          name: payload.name,
+          brandId: Number(payload.brandId) || null,
+          costPrice: Number(payload.costPrice || 0),
+          salePrice: Number(payload.salePrice || 0),
         },
         token
       );
       setStatus({ type: "ok", text: "Producto creado" });
-      setProductForm({ sku: "", name: "", brandId: "", costPrice: "", salePrice: "" });
       await load(token);
     } catch (e2) {
       setStatus({ type: "error", text: e2.message });
+      throw e2;
     }
   }
 
-  async function handleClient(e) {
-    e.preventDefault();
+  async function handleUpdateProduct(productId, payload) {
+    try {
+      await updateProduct(productId, {
+        sku: payload.sku,
+        name: payload.name,
+        brandId: Number(payload.brandId) || null,
+        costPrice: Number(payload.costPrice || 0),
+        salePrice: Number(payload.salePrice || 0),
+        active: payload.active,
+      }, token);
+      setStatus({ type: "ok", text: "Producto actualizado" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleCreateClient(payload) {
     try {
       await createClient(
         {
-          fullName: clientForm.fullName,
-          taxId: clientForm.taxId || null,
-          phone: clientForm.phone || null,
-          address: clientForm.address || null,
+          fullName: payload.fullName,
+          taxId: payload.taxId || null,
+          phone: payload.phone || null,
+          address: payload.address || null,
         },
         token
       );
       setStatus({ type: "ok", text: "Cliente creado correctamente" });
-      setClientForm({ fullName: "", taxId: "", phone: "", address: "" });
-      setShowClientForm(false);
       await load(token);
     } catch (e2) {
       setStatus({ type: "error", text: e2.message });
+      throw e2;
     }
   }
 
-  async function handleSupplier(e) {
-    e.preventDefault();
+  async function handleUpdateClient(clientId, payload) {
+    try {
+      await updateClient(clientId, {
+        fullName: payload.fullName,
+        taxId: payload.taxId || null,
+        phone: payload.phone || null,
+        address: payload.address || null,
+      }, token);
+      setStatus({ type: "ok", text: "Cliente actualizado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleCreateSupplier(payload) {
     try {
       await createSupplier(
         {
-          businessName: supplierForm.businessName,
-          taxId: supplierForm.taxId || null,
-          phone: supplierForm.phone || null,
-          address: supplierForm.address || null,
+          businessName: payload.businessName,
+          taxId: payload.taxId || null,
+          phone: payload.phone || null,
+          address: payload.address || null,
         },
         token
       );
       setStatus({ type: "ok", text: "Proveedor creado correctamente" });
-      setSupplierForm({ businessName: "", taxId: "", phone: "", address: "" });
-      setShowSupplierForm(false);
       await load(token);
     } catch (e2) {
       setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleUpdateSupplier(supplierId, payload) {
+    try {
+      await updateSupplier(supplierId, {
+        businessName: payload.businessName,
+        taxId: payload.taxId || null,
+        phone: payload.phone || null,
+        address: payload.address || null,
+      }, token);
+      setStatus({ type: "ok", text: "Proveedor actualizado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleCreateInventoryAdjustment(payload) {
+    try {
+      await createInventoryAdjustment(payload, token);
+      setStatus({ type: "ok", text: "Ajuste de inventario registrado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleCreateUser(payload) {
+    try {
+      await createUser(payload, token);
+      setStatus({ type: "ok", text: "Usuario creado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleUpdateUser(userId, payload) {
+    try {
+      await updateUser(userId, payload, token);
+      setStatus({ type: "ok", text: "Usuario actualizado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
     }
   }
 
@@ -790,6 +1054,7 @@ export default function DashboardPage() {
   const tabList = [["dashboard", "Dashboard"], ["cash", "Caja"], ["sales-list", "Ventas"], ["purchases-list", "Compras"], ["operations", "Inventario y movimientos"]];
   if (canOperate) tabList.push(["contacts", "Clientes y proveedores"]);
   if (canOperate) tabList.push(["products", "Productos"]);
+  if (isAdmin) tabList.push(["users", "Usuarios"]);
 
   return (
     <main>
@@ -800,6 +1065,37 @@ export default function DashboardPage() {
         </div>
         <button className="secondary" onClick={handleLogout}>Cerrar sesion</button>
       </div>
+
+      {isSeller ? (
+        <div className="panel card" style={{ marginBottom: 12 }}>
+          <div className="label">Punto de venta activo</div>
+          <div className="value" style={{ fontSize: "1rem" }}>
+            {data.warehouses.find((w) => String(w.id) === String(selectedPosWarehouseId))?.name || "No seleccionado"}
+          </div>
+          <button type="button" className="secondary" style={{ marginTop: 8 }} onClick={() => setShowPosSelectionModal(true)}>
+            Cambiar punto de venta
+          </button>
+        </div>
+      ) : null}
+
+      {showPosSelectionModal ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Seleccionar punto de venta</h2>
+            <p className="label">Debes elegir el deposito/punto de venta para operar y usar su caja correspondiente.</p>
+            <div className="row" style={{ marginBottom: 12 }}>
+              <select value={selectedPosWarehouseId} onChange={(e) => setSelectedPosWarehouseId(e.target.value)}>
+                <option value="">Seleccionar punto de venta</option>
+                {data.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={() => setShowPosSelectionModal(false)}>Cancelar</button>
+              <button type="button" onClick={confirmPosSelection}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showCashPrompt ? (
         <div className="modalOverlay">
@@ -821,6 +1117,16 @@ export default function DashboardPage() {
           <div className="panel section modalCard">
             <h2>Confirmar cierre de caja</h2>
             <p className="label">Esta accion cerrara la caja actual con el monto de cierre ingresado.</p>
+            <div className="row" style={{ marginBottom: 12 }}>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Monto de cierre"
+                value={closeAmountInput}
+                onChange={(e) => setCloseAmountInput(e.target.value)}
+              />
+            </div>
             <div className="modalActions">
               <button type="button" className="secondary" onClick={closeCloseCashModal}>Cancelar</button>
               <button type="button" className="danger" onClick={confirmCloseCashSession}>Confirmar cierre</button>
@@ -839,6 +1145,58 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {showOpenCashModal ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Abrir caja</h2>
+            <p className="label">Ingresa el monto de apertura para iniciar la sesion de caja.</p>
+            <div className="row" style={{ marginBottom: 12 }}>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Monto de apertura"
+                value={openAmountInput}
+                onChange={(e) => setOpenAmountInput(e.target.value)}
+              />
+            </div>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={closeOpenCashModal}>Cancelar</button>
+              <button type="button" onClick={confirmOpenCashSession}>Confirmar apertura</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showWithdrawCashModal ? (
+        <div className="modalOverlay">
+          <div className="panel section modalCard">
+            <h2>Retiro de caja</h2>
+            <p className="label">Ingresa el monto y una contrasena de administrador para autorizar el retiro.</p>
+            <div className="grid" style={{ marginBottom: 12 }}>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                placeholder="Monto a retirar"
+                value={withdrawAmountInput}
+                onChange={(e) => setWithdrawAmountInput(e.target.value)}
+              />
+              <input
+                type="password"
+                placeholder="Contrasena de administrador"
+                value={withdrawAdminPassword}
+                onChange={(e) => setWithdrawAdminPassword(e.target.value)}
+              />
+            </div>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={closeWithdrawCashModal}>Cancelar</button>
+              <button type="button" className="danger" onClick={confirmWithdrawCashSession}>Confirmar retiro</button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -894,17 +1252,18 @@ export default function DashboardPage() {
 
         {!loading && tab === "dashboard" ? (<DashboardTab data={data} topProducts={topProducts} lowStockProducts={lowStockProducts} qty={qty} />) : null}
 
-        {!loading && tab === "cash" ? (<CashTab cashSessionInfo={cashSessionInfo} openAmountInput={openAmountInput} setOpenAmountInput={setOpenAmountInput} closeAmountInput={closeAmountInput} setCloseAmountInput={setCloseAmountInput} handleOpenCashSession={handleOpenCashSession} openCloseCashModal={openCloseCashModal} cashSessionMovements={cashSessionMovements} money={money} />) : null}
+        {!loading && tab === "cash" ? (<CashTab cashSessionInfo={cashSessionInfo} openOpenCashModal={openOpenCashModal} openCloseCashModal={openCloseCashModal} openWithdrawCashModal={openWithdrawCashModal} cashSessionMovements={cashSessionMovements} money={money} />) : null}
 
-                {!loading && tab === "sales-list" && canOperate ? (<SalesListTab showNewSaleForm={showNewSaleForm} setShowNewSaleForm={setShowNewSaleForm} openNewSaleForm={openNewSaleForm} handleSale={handleSale} saleForm={saleForm} setSaleForm={setSaleForm} sessionUser={sessionUser} data={data} updateSaleDetail={updateSaleDetail} removeSaleDetail={removeSaleDetail} addSaleDetail={addSaleDetail} saleTotal={saleTotal} money={money} salesListRows={salesListRows} expandedSaleId={expandedSaleId} handleToggleSaleDetail={handleToggleSaleDetail} saleDetailById={saleDetailById} qty={qty} />) : null}
+        {!loading && tab === "sales-list" && canOperate ? (<SalesListTab showNewSaleForm={showNewSaleForm} setShowNewSaleForm={setShowNewSaleForm} openNewSaleForm={openNewSaleForm} handleSale={handleSale} saleForm={saleForm} setSaleForm={setSaleForm} sessionUser={sessionUser} data={data} updateSaleDetail={updateSaleDetail} removeSaleDetail={removeSaleDetail} addSaleDetail={addSaleDetail} saleTotal={saleTotal} money={money} salesListRows={salesListRows} expandedSaleId={expandedSaleId} handleToggleSaleDetail={handleToggleSaleDetail} saleDetailById={saleDetailById} qty={qty} isSeller={isSeller} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
 
-        {!loading && tab === "purchases-list" && canOperate ? (<PurchasesListTab showNewPurchaseForm={showNewPurchaseForm} setShowNewPurchaseForm={setShowNewPurchaseForm} openNewPurchaseForm={openNewPurchaseForm} handlePurchase={handlePurchase} purchaseForm={purchaseForm} setPurchaseForm={setPurchaseForm} sessionUser={sessionUser} data={data} updatePurchaseDetail={updatePurchaseDetail} removePurchaseDetail={removePurchaseDetail} addPurchaseDetail={addPurchaseDetail} purchaseTotal={purchaseTotal} money={money} purchasesListRows={purchasesListRows} expandedPurchaseId={expandedPurchaseId} handleTogglePurchaseDetail={handleTogglePurchaseDetail} purchaseDetailById={purchaseDetailById} qty={qty} />) : null}
+        {!loading && tab === "purchases-list" && canOperate ? (<PurchasesListTab showNewPurchaseForm={showNewPurchaseForm} setShowNewPurchaseForm={setShowNewPurchaseForm} openNewPurchaseForm={openNewPurchaseForm} handlePurchase={handlePurchase} purchaseForm={purchaseForm} setPurchaseForm={setPurchaseForm} sessionUser={sessionUser} data={data} updatePurchaseDetail={updatePurchaseDetail} removePurchaseDetail={removePurchaseDetail} addPurchaseDetail={addPurchaseDetail} purchaseTotal={purchaseTotal} money={money} purchasesListRows={purchasesListRows} expandedPurchaseId={expandedPurchaseId} handleTogglePurchaseDetail={handleTogglePurchaseDetail} purchaseDetailById={purchaseDetailById} qty={qty} isSeller={isSeller} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
 
-        {!loading && tab === "products" && canOperate ? (<ProductsTab isAdmin={isAdmin} handleProduct={handleProduct} productForm={productForm} setProductForm={setProductForm} data={data} productQuery={productQuery} setProductQuery={setProductQuery} productOnlyStock={productOnlyStock} setProductOnlyStock={setProductOnlyStock} productStockOrder={productStockOrder} setProductStockOrder={setProductStockOrder} filteredProducts={filteredProducts} stockByProduct={stockByProduct} addProductToSaleCart={addProductToSaleCart} money={money} qty={qty} setProductOnlyStockAndQuery={() => { setProductQuery(""); setProductOnlyStock(false); }} />) : null}
+        {!loading && tab === "products" && canOperate ? (<ProductsTab isAdmin={isAdmin} onCreateProduct={handleCreateProduct} onUpdateProduct={handleUpdateProduct} onCreateInventoryAdjustment={handleCreateInventoryAdjustment} data={data} productQuery={productQuery} setProductQuery={setProductQuery} productOnlyStock={productOnlyStock} setProductOnlyStock={setProductOnlyStock} productStockOrder={productStockOrder} setProductStockOrder={setProductStockOrder} filteredProducts={filteredProducts} stockByProduct={stockByProduct} addProductToSaleCart={addProductToSaleCart} money={money} qty={qty} setProductOnlyStockAndQuery={() => { setProductQuery(""); setProductOnlyStock(false); }} />) : null}
 
         {!loading && tab === "operations" ? (<OperationsTab data={data} movementSummaryRows={movementSummaryRows} expandedMovementId={expandedMovementId} setExpandedMovementId={setExpandedMovementId} qty={qty} money={money} />) : null}
 
-        {!loading && tab === "contacts" && canOperate ? (<ContactsTab showClientForm={showClientForm} setShowClientForm={setShowClientForm} handleClient={handleClient} clientForm={clientForm} setClientForm={setClientForm} data={data} showSupplierForm={showSupplierForm} setShowSupplierForm={setShowSupplierForm} handleSupplier={handleSupplier} supplierForm={supplierForm} setSupplierForm={setSupplierForm} /> ) : null}
+        {!loading && tab === "contacts" && canOperate ? (<ContactsTab data={data} onCreateClient={handleCreateClient} onUpdateClient={handleUpdateClient} onCreateSupplier={handleCreateSupplier} onUpdateSupplier={handleUpdateSupplier} /> ) : null}
+        {!loading && tab === "users" && isAdmin ? (<UsersTab users={data.users} roles={data.roles} onCreateUser={handleCreateUser} onUpdateUser={handleUpdateUser} />) : null}
       </div>
 
       {canOperate ? (

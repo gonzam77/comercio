@@ -31,7 +31,14 @@ export async function login(payload) {
 }
 
 function authHeaders(token) {
-  return { Authorization: `Bearer ${token}` };
+  const headers = { Authorization: `Bearer ${token}` };
+  if (typeof window !== 'undefined') {
+    const warehouseId = localStorage.getItem('comercio_pos_warehouse_id');
+    if (warehouseId) {
+      headers['x-pos-warehouse-id'] = warehouseId;
+    }
+  }
+  return headers;
 }
 
 export async function getInitialData(token) {
@@ -40,6 +47,7 @@ export async function getInitialData(token) {
     '/brands',
     '/clients',
     '/suppliers',
+    '/roles',
     '/users',
     '/warehouses',
     '/payment-methods',
@@ -60,17 +68,18 @@ export async function getInitialData(token) {
     brands: results[1],
     clients: results[2],
     suppliers: results[3],
-    users: results[4],
-    warehouses: results[5],
-    paymentMethods: results[6],
-    movementTypes: results[7],
-    movements: results[8],
-    sales: results[9],
-    purchases: results[10],
-    saleDetails: results[11],
-    purchaseDetails: results[12],
-    inventories: results[13],
-    cashflows: results[14],
+    roles: results[4],
+    users: results[5],
+    warehouses: results[6],
+    paymentMethods: results[7],
+    movementTypes: results[8],
+    movements: results[9],
+    sales: results[10],
+    purchases: results[11],
+    saleDetails: results[12],
+    purchaseDetails: results[13],
+    inventories: results[14],
+    cashflows: results[15],
   };
 }
 
@@ -110,6 +119,14 @@ export async function createProduct(payload, token) {
   });
 }
 
+export async function updateProduct(id, payload, token) {
+  return request(`/products/${id}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createClient(payload, token) {
   return request('/clients', {
     method: 'POST',
@@ -118,9 +135,41 @@ export async function createClient(payload, token) {
   });
 }
 
+export async function updateClient(id, payload, token) {
+  return request(`/clients/${id}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createSupplier(payload, token) {
   return request('/suppliers', {
     method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateSupplier(id, payload, token) {
+  return request(`/suppliers/${id}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createUser(payload, token) {
+  return request('/users', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateUser(id, payload, token) {
+  return request(`/users/${id}`, {
+    method: 'PUT',
     headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
@@ -142,6 +191,22 @@ export async function openCashSession(payload, token) {
 
 export async function closeCashSession(payload, token) {
   return request('/cash-sessions/close', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function withdrawCashSession(payload, token) {
+  return request('/cash-sessions/withdraw', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createInventoryAdjustment(payload, token) {
+  return request('/inventory-adjustments', {
     method: 'POST',
     headers: authHeaders(token),
     body: JSON.stringify(payload),

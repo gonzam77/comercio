@@ -60,10 +60,14 @@ async function createMovement({
   }, { transaction: t });
 
   for (const d of details) {
+    const movementQty = movementTypeCode === 'AJUSTE'
+      ? Number(d.qtyDelta || 0)
+      : Number(d.quantity);
+
     await MovementDetail.create({
       movementId: movement.id,
       productId: d.productId,
-      quantity: d.quantity,
+      quantity: movementQty,
       unitCost: d.unitCost || 0,
     }, { transaction: t });
 
@@ -143,6 +147,35 @@ async function createMovement({
         unitCost: d.unitCost || 0,
       }, { transaction: t });
     }
+
+    if (movementTypeCode === 'AJUSTE') {
+      const qtyDelta = Number(d.qtyDelta || 0);
+      if (qtyDelta === 0) continue;
+      const targetWarehouseId = warehouseFromId || warehouseToId;
+      if (!targetWarehouseId) {
+        const err = new Error('Deposito de ajuste no especificado');
+        err.status = 400;
+        throw err;
+      }
+
+      const balanceQty = await adjustStock({
+        productId: d.productId,
+        warehouseId: targetWarehouseId,
+        qtyDelta,
+        t,
+      });
+
+      await Kardex.create({
+        movementId: movement.id,
+        productId: d.productId,
+        warehouseId: targetWarehouseId,
+        movementDate,
+        quantityIn: qtyDelta > 0 ? qtyDelta : 0,
+        quantityOut: qtyDelta < 0 ? Math.abs(qtyDelta) : 0,
+        balanceQty,
+        unitCost: d.unitCost || 0,
+      }, { transaction: t });
+    }
   }
 
   return movement;
@@ -155,4 +188,5 @@ async function withTransaction(task) {
 module.exports = {
   createMovement,
   withTransaction,
+  adjustStock,
 };

@@ -1,11 +1,8 @@
 export default function CashTab({
   cashSessionInfo,
-  openAmountInput,
-  setOpenAmountInput,
-  closeAmountInput,
-  setCloseAmountInput,
-  handleOpenCashSession,
+  openOpenCashModal,
   openCloseCashModal,
+  openWithdrawCashModal,
   cashSessionMovements,
   money,
 }) {
@@ -21,12 +18,11 @@ export default function CashTab({
       <div className="row" style={{ marginBottom: 12 }}>
         {!cashSessionInfo.hasOpenSession ? (
           <>
-            <input type="number" min="0" step="0.01" placeholder="Monto de apertura" value={openAmountInput} onChange={(e) => setOpenAmountInput(e.target.value)} />
-            <button type="button" onClick={handleOpenCashSession}>Abrir caja</button>
+            <button type="button" onClick={openOpenCashModal}>Abrir caja</button>
           </>
         ) : (
           <>
-            <input type="number" min="0" step="0.01" placeholder="Monto de cierre" value={closeAmountInput} onChange={(e) => setCloseAmountInput(e.target.value)} />
+            <button type="button" className="secondary" onClick={openWithdrawCashModal}>Retiro de caja</button>
             <button type="button" className="danger" onClick={openCloseCashModal}>Cerrar caja</button>
           </>
         )}
