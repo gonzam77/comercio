@@ -58,9 +58,9 @@ export default function UsersTab({ users, roles, onCreateUser, onUpdateUser }) {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         <h2>Administracion de usuarios</h2>
-        <button type="button" onClick={() => setShowCreateModal(true)}>Agregar usuario</button>
+        <button type="button" className="secondary" onClick={() => setShowCreateModal(true)}>Agregar</button>
       </div>
 
       <div className="tableWrap">
@@ -105,7 +105,7 @@ export default function UsersTab({ users, roles, onCreateUser, onUpdateUser }) {
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}><input type="checkbox" checked={createForm.active} onChange={(e) => setCreateForm((s) => ({ ...s, active: e.target.checked }))} />Usuario activo</label>
               <div className="modalActions">
                 <button type="button" className="secondary" onClick={() => setShowCreateModal(false)}>Cancelar</button>
-                <button type="submit">Guardar usuario</button>
+                <button type="submit">Guardar</button>
               </div>
             </form>
           </div>
@@ -133,7 +133,7 @@ export default function UsersTab({ users, roles, onCreateUser, onUpdateUser }) {
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}><input type="checkbox" checked={editForm.active} onChange={(e) => setEditForm((s) => ({ ...s, active: e.target.checked }))} />Usuario activo</label>
               <div className="modalActions">
                 <button type="button" className="secondary" onClick={() => setEditingUser(null)}>Cancelar</button>
-                <button type="submit">Guardar cambios</button>
+                <button type="submit">Guardar</button>
               </div>
             </form>
           </div>

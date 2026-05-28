@@ -105,11 +105,11 @@ export default function ProductsTab({ isAdmin, onCreateProduct, onUpdateProduct,
   return (
     <>
       {isAdmin ? (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
           <h2>Catalogo de productos</h2>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button type="button" className="secondary" onClick={openAdjustmentModal}>Ajuste de inventario</button>
-            <button type="button" onClick={() => setShowCreateModal(true)}>Nuevo producto</button>
+            <button type="button" className="secondary" onClick={() => setShowCreateModal(true)}>Agregar</button>
           </div>
         </div>
       ) : <h2 style={{ marginTop: 18 }}>Catalogo</h2>}
@@ -135,7 +135,7 @@ export default function ProductsTab({ isAdmin, onCreateProduct, onUpdateProduct,
               <input type="number" min="0" step="0.01" placeholder="Precio venta" value={createForm.salePrice} onChange={(e) => setCreateForm((s) => ({ ...s, salePrice: e.target.value }))} />
               <div className="modalActions">
                 <button type="button" className="secondary" onClick={() => setShowCreateModal(false)}>Cancelar</button>
-                <button type="submit">Crear</button>
+                <button type="submit">Guardar</button>
               </div>
             </form>
           </div>
@@ -155,7 +155,7 @@ export default function ProductsTab({ isAdmin, onCreateProduct, onUpdateProduct,
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}><input type="checkbox" checked={editForm.active} onChange={(e) => setEditForm((s) => ({ ...s, active: e.target.checked }))} />Producto activo</label>
               <div className="modalActions">
                 <button type="button" className="secondary" onClick={() => setEditingProduct(null)}>Cancelar</button>
-                <button type="submit">Guardar cambios</button>
+                <button type="submit">Guardar</button>
               </div>
             </form>
           </div>
@@ -164,7 +164,14 @@ export default function ProductsTab({ isAdmin, onCreateProduct, onUpdateProduct,
 
       {showAdjustmentModal ? (
         <div className="modalOverlay">
-          <div className="panel section modalCard" style={{ maxWidth: 980 }}>
+          <div
+            className="panel section modalCard"
+            style={{
+              width: "min(1180px, 96vw)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+            }}
+          >
             <h2>Ajuste de inventario</h2>
             <form className="grid" onSubmit={submitAdjustment}>
               <div className="row">
