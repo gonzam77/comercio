@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { closeCashSession, createClient, createInventoryAdjustment, createProduct, createPurchase, createSale, createSupplier, createUser, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession, updateClient, updateProduct, updateSupplier, updateUser, withdrawCashSession } from "../lib/api";
+import { closeCashSession, createClient, createInventoryAdjustment, createProduct, createPurchase, createSale, createSupplier, createUser, createWarehouse, getInitialData, getMyCashSession, getPurchaseById, getSaleById, login, openCashSession, updateClient, updateProduct, updateSupplier, updateUser, updateWarehouse, withdrawCashSession } from "../lib/api";
 import DashboardTab from "./components/tabs/DashboardTab";
 import CashTab from "./components/tabs/CashTab";
 import SalesListTab from "./components/tabs/SalesListTab";
@@ -10,9 +10,12 @@ import ProductsTab from "./components/tabs/ProductsTab";
 import OperationsTab from "./components/tabs/OperationsTab";
 import ContactsTab from "./components/tabs/ContactsTab";
 import UsersTab from "./components/tabs/UsersTab";
+import SalesPointsTab from "./components/tabs/SalesPointsTab";
 
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 3 });
+const SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const LAST_ACTIVITY_STORAGE_KEY = "comercio_last_activity_at";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -28,6 +31,7 @@ function emptyDetail() {
 
 export default function DashboardPage() {
   const [tab, setTab] = useState("dashboard");
+  const [configTab, setConfigTab] = useState("contacts");
   const [token, setToken] = useState("");
   const [sessionUser, setSessionUser] = useState(null);
   const [selectedPosWarehouseId, setSelectedPosWarehouseId] = useState("");
@@ -95,10 +99,23 @@ export default function DashboardPage() {
   const [withdrawAdminPassword, setWithdrawAdminPassword] = useState("");
   const [cartProductModal, setCartProductModal] = useState({ open: false, product: null, quantity: "1" });
 
+  function markSessionActivity() {
+    localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, String(Date.now()));
+  }
+
+  function isSessionExpiredByInactivity() {
+    const lastActivityRaw = localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
+    if (!lastActivityRaw) return false;
+    const lastActivity = Number(lastActivityRaw);
+    if (!Number.isFinite(lastActivity)) return false;
+    return (Date.now() - lastActivity) >= SESSION_IDLE_TIMEOUT_MS;
+  }
+
   const roles = sessionUser?.roles || [];
   const isAdmin = roles.includes("ADMIN");
   const isSeller = roles.includes("VENDEDOR");
   const canOperate = isAdmin || isSeller;
+  const usesPosSelection = canOperate;
 
   async function load(authToken) {
     if (!authToken) return;
@@ -126,9 +143,10 @@ export default function DashboardPage() {
     setSelectedPosWarehouseId(value);
   }
 
-  function resolveAndSetSellerPos(user, warehouses) {
-    const isSellerUser = (user?.roles || []).includes("VENDEDOR");
-    if (!isSellerUser) {
+  function resolveAndSetOperatorPos(user, warehouses) {
+    const userRoles = user?.roles || [];
+    const isOperatorUser = userRoles.includes("ADMIN") || userRoles.includes("VENDEDOR");
+    if (!isOperatorUser) {
       setShowPosSelectionModal(false);
       return "";
     }
@@ -184,13 +202,20 @@ export default function DashboardPage() {
     const savedToken = localStorage.getItem("comercio_token") || "";
     const savedUser = localStorage.getItem("comercio_user");
     if (savedToken && savedUser) {
+      if (isSessionExpiredByInactivity()) {
+        handleLogout("Sesion expirada por inactividad. Inicia sesion nuevamente.");
+        return;
+      }
       const user = JSON.parse(savedUser);
+      markSessionActivity();
       setToken(savedToken);
       setSessionUser(user);
       load(savedToken).then((loaded) => {
         const warehouses = loaded?.warehouses || [];
-        const selected = resolveAndSetSellerPos(user, warehouses);
-        const shouldLoadCash = !(user.roles || []).includes("VENDEDOR") || Boolean(selected);
+        const selected = resolveAndSetOperatorPos(user, warehouses);
+        const userRoles = user?.roles || [];
+        const isOperatorUser = userRoles.includes("ADMIN") || userRoles.includes("VENDEDOR");
+        const shouldLoadCash = !isOperatorUser || Boolean(selected);
         if (shouldLoadCash) {
           refreshCashSession(savedToken).then((info) => {
             setShowCashPrompt(Boolean(info && !info.hasOpenSession));
@@ -199,6 +224,32 @@ export default function DashboardPage() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!token) return undefined;
+
+    const activityEvents = ["click", "keydown", "mousemove", "scroll", "touchstart"];
+    const onActivity = () => {
+      markSessionActivity();
+    };
+
+    const interval = setInterval(() => {
+      if (isSessionExpiredByInactivity()) {
+        handleLogout("Sesion expirada por inactividad. Inicia sesion nuevamente.");
+      }
+    }, 60 * 1000);
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, onActivity, { passive: true });
+    });
+
+    return () => {
+      clearInterval(interval);
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, onActivity);
+      });
+    };
+  }, [token]);
 
   const metrics = useMemo(() => {
     const now = new Date();
@@ -468,13 +519,16 @@ export default function DashboardPage() {
       const res = await login(loginForm);
       localStorage.setItem("comercio_token", res.token);
       localStorage.setItem("comercio_user", JSON.stringify(res.user));
+      markSessionActivity();
       setToken(res.token);
       setSessionUser(res.user);
       setStatus({ type: "ok", text: `Bienvenido ${res.user.name}` });
       const loaded = await load(res.token);
       const warehouses = loaded?.warehouses || [];
-      const selected = resolveAndSetSellerPos(res.user, warehouses);
-      const shouldLoadCash = !(res.user.roles || []).includes("VENDEDOR") || Boolean(selected);
+      const selected = resolveAndSetOperatorPos(res.user, warehouses);
+      const userRoles = res.user?.roles || [];
+      const isOperatorUser = userRoles.includes("ADMIN") || userRoles.includes("VENDEDOR");
+      const shouldLoadCash = !isOperatorUser || Boolean(selected);
       if (shouldLoadCash) {
         const info = await refreshCashSession(res.token);
         setShowCashPrompt(Boolean(info && !info.hasOpenSession));
@@ -486,12 +540,17 @@ export default function DashboardPage() {
     }
   }
 
-  function handleLogout() {
+  function handleLogout(reasonText = "") {
+    const safeReasonText = typeof reasonText === "string" ? reasonText : "";
     localStorage.removeItem("comercio_token");
     localStorage.removeItem("comercio_user");
     localStorage.removeItem("comercio_pos_warehouse_id");
+    localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
     setToken("");
     setSessionUser(null);
+    if (safeReasonText) {
+      setStatus({ type: "error", text: safeReasonText });
+    }
     setSelectedPosWarehouseId("");
     setShowPosSelectionModal(false);
     setCashSessionInfo({ hasOpenSession: false, session: null, summary: null, movements: [], recentSessions: [] });
@@ -747,7 +806,7 @@ export default function DashboardPage() {
     setSaleForm((s) => ({
       ...s,
       clientId: defaultConsumerClientId || s.clientId || (firstClient ? String(firstClient.id) : ""),
-      warehouseId: isSeller
+      warehouseId: usesPosSelection
         ? (selectedPosWarehouseId || (firstWarehouse ? String(firstWarehouse.id) : ""))
         : (s.warehouseId || (firstWarehouse ? String(firstWarehouse.id) : "")),
       saleDate: today(),
@@ -769,7 +828,7 @@ export default function DashboardPage() {
     setPurchaseForm((s) => ({
       ...s,
       supplierId: s.supplierId || (firstSupplier ? String(firstSupplier.id) : ""),
-      warehouseId: isSeller
+      warehouseId: usesPosSelection
         ? (selectedPosWarehouseId || (firstWarehouse ? String(firstWarehouse.id) : ""))
         : (s.warehouseId || (firstWarehouse ? String(firstWarehouse.id) : "")),
       purchaseDate: today(),
@@ -1017,6 +1076,28 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleCreateWarehouse(payload) {
+    try {
+      await createWarehouse(payload, token);
+      setStatus({ type: "ok", text: "Punto de venta creado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
+  async function handleUpdateWarehouse(warehouseId, payload) {
+    try {
+      await updateWarehouse(warehouseId, payload, token);
+      setStatus({ type: "ok", text: "Punto de venta actualizado correctamente" });
+      await load(token);
+    } catch (e2) {
+      setStatus({ type: "error", text: e2.message });
+      throw e2;
+    }
+  }
+
   if (!token || !sessionUser) {
     return (
       <main>
@@ -1052,9 +1133,7 @@ export default function DashboardPage() {
   }
 
   const tabList = [["dashboard", "Dashboard"], ["cash", "Caja"], ["sales-list", "Ventas"], ["purchases-list", "Compras"], ["operations", "Inventario y movimientos"]];
-  if (canOperate) tabList.push(["contacts", "Clientes y proveedores"]);
-  if (canOperate) tabList.push(["products", "Productos"]);
-  if (isAdmin) tabList.push(["users", "Usuarios"]);
+  if (canOperate || isAdmin) tabList.push(["config", "Configuracion"]);
 
   return (
     <main>
@@ -1066,7 +1145,28 @@ export default function DashboardPage() {
         <button className="secondary" onClick={handleLogout}>Cerrar sesion</button>
       </div>
 
-      {isSeller ? (
+      <div className="tabs" style={{ marginBottom: 12 }}>
+        {tabList.map(([id, label]) => (
+          <button
+            key={id}
+            className={`tab ${tab === id ? "active" : ""}`}
+            onClick={() => {
+              setTab(id);
+              if (id === "config") {
+                if (canOperate) {
+                  setConfigTab("contacts");
+                } else if (isAdmin) {
+                  setConfigTab("sales-points");
+                }
+              }
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {usesPosSelection ? (
         <div className="panel card" style={{ marginBottom: 12 }}>
           <div className="label">Punto de venta activo</div>
           <div className="value" style={{ fontSize: "1rem" }}>
@@ -1239,12 +1339,6 @@ export default function DashboardPage() {
         </select>
       </div>
 
-      <div className="tabs">
-        {tabList.map(([id, label]) => (
-          <button key={id} className={`tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{label}</button>
-        ))}
-      </div>
-
       {status.text ? <div className={`alert ${status.type}`}>{status.text}</div> : null}
 
       <div className="panel section">
@@ -1254,16 +1348,53 @@ export default function DashboardPage() {
 
         {!loading && tab === "cash" ? (<CashTab cashSessionInfo={cashSessionInfo} openOpenCashModal={openOpenCashModal} openCloseCashModal={openCloseCashModal} openWithdrawCashModal={openWithdrawCashModal} cashSessionMovements={cashSessionMovements} money={money} />) : null}
 
-        {!loading && tab === "sales-list" && canOperate ? (<SalesListTab showNewSaleForm={showNewSaleForm} setShowNewSaleForm={setShowNewSaleForm} openNewSaleForm={openNewSaleForm} handleSale={handleSale} saleForm={saleForm} setSaleForm={setSaleForm} sessionUser={sessionUser} data={data} updateSaleDetail={updateSaleDetail} removeSaleDetail={removeSaleDetail} addSaleDetail={addSaleDetail} saleTotal={saleTotal} money={money} salesListRows={salesListRows} expandedSaleId={expandedSaleId} handleToggleSaleDetail={handleToggleSaleDetail} saleDetailById={saleDetailById} qty={qty} isSeller={isSeller} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
+        {!loading && tab === "sales-list" && canOperate ? (<SalesListTab showNewSaleForm={showNewSaleForm} setShowNewSaleForm={setShowNewSaleForm} openNewSaleForm={openNewSaleForm} handleSale={handleSale} saleForm={saleForm} setSaleForm={setSaleForm} sessionUser={sessionUser} data={data} updateSaleDetail={updateSaleDetail} removeSaleDetail={removeSaleDetail} addSaleDetail={addSaleDetail} saleTotal={saleTotal} money={money} salesListRows={salesListRows} expandedSaleId={expandedSaleId} handleToggleSaleDetail={handleToggleSaleDetail} saleDetailById={saleDetailById} qty={qty} isSeller={usesPosSelection} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
 
-        {!loading && tab === "purchases-list" && canOperate ? (<PurchasesListTab showNewPurchaseForm={showNewPurchaseForm} setShowNewPurchaseForm={setShowNewPurchaseForm} openNewPurchaseForm={openNewPurchaseForm} handlePurchase={handlePurchase} purchaseForm={purchaseForm} setPurchaseForm={setPurchaseForm} sessionUser={sessionUser} data={data} updatePurchaseDetail={updatePurchaseDetail} removePurchaseDetail={removePurchaseDetail} addPurchaseDetail={addPurchaseDetail} purchaseTotal={purchaseTotal} money={money} purchasesListRows={purchasesListRows} expandedPurchaseId={expandedPurchaseId} handleTogglePurchaseDetail={handleTogglePurchaseDetail} purchaseDetailById={purchaseDetailById} qty={qty} isSeller={isSeller} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
-
-        {!loading && tab === "products" && canOperate ? (<ProductsTab isAdmin={isAdmin} onCreateProduct={handleCreateProduct} onUpdateProduct={handleUpdateProduct} onCreateInventoryAdjustment={handleCreateInventoryAdjustment} data={data} productQuery={productQuery} setProductQuery={setProductQuery} productOnlyStock={productOnlyStock} setProductOnlyStock={setProductOnlyStock} productStockOrder={productStockOrder} setProductStockOrder={setProductStockOrder} filteredProducts={filteredProducts} stockByProduct={stockByProduct} addProductToSaleCart={addProductToSaleCart} money={money} qty={qty} setProductOnlyStockAndQuery={() => { setProductQuery(""); setProductOnlyStock(false); }} />) : null}
+        {!loading && tab === "purchases-list" && canOperate ? (<PurchasesListTab showNewPurchaseForm={showNewPurchaseForm} setShowNewPurchaseForm={setShowNewPurchaseForm} openNewPurchaseForm={openNewPurchaseForm} handlePurchase={handlePurchase} purchaseForm={purchaseForm} setPurchaseForm={setPurchaseForm} sessionUser={sessionUser} data={data} updatePurchaseDetail={updatePurchaseDetail} removePurchaseDetail={removePurchaseDetail} addPurchaseDetail={addPurchaseDetail} purchaseTotal={purchaseTotal} money={money} purchasesListRows={purchasesListRows} expandedPurchaseId={expandedPurchaseId} handleTogglePurchaseDetail={handleTogglePurchaseDetail} purchaseDetailById={purchaseDetailById} qty={qty} isSeller={usesPosSelection} selectedPosWarehouseId={selectedPosWarehouseId} />) : null}
 
         {!loading && tab === "operations" ? (<OperationsTab data={data} movementSummaryRows={movementSummaryRows} expandedMovementId={expandedMovementId} setExpandedMovementId={setExpandedMovementId} qty={qty} money={money} />) : null}
 
-        {!loading && tab === "contacts" && canOperate ? (<ContactsTab data={data} onCreateClient={handleCreateClient} onUpdateClient={handleUpdateClient} onCreateSupplier={handleCreateSupplier} onUpdateSupplier={handleUpdateSupplier} /> ) : null}
-        {!loading && tab === "users" && isAdmin ? (<UsersTab users={data.users} roles={data.roles} onCreateUser={handleCreateUser} onUpdateUser={handleUpdateUser} />) : null}
+        {!loading && tab === "config" ? (
+          <div className="configLayout">
+            <aside className="configMenu">
+              {canOperate ? (
+                <button className={`configMenuButton ${configTab === "contacts" ? "active" : ""}`} onClick={() => setConfigTab("contacts")}>
+                  Clientes y proveedores
+                </button>
+              ) : null}
+              {canOperate ? (
+                <button className={`configMenuButton ${configTab === "products" ? "active" : ""}`} onClick={() => setConfigTab("products")}>
+                  Productos
+                </button>
+              ) : null}
+              {isAdmin ? (
+                <button className={`configMenuButton ${configTab === "sales-points" ? "active" : ""}`} onClick={() => setConfigTab("sales-points")}>
+                  Puntos de venta
+                </button>
+              ) : null}
+              {isAdmin ? (
+                <button className={`configMenuButton ${configTab === "users" ? "active" : ""}`} onClick={() => setConfigTab("users")}>
+                  Usuarios
+                </button>
+              ) : null}
+            </aside>
+
+            <div className="configContent">
+              {configTab === "contacts" && canOperate ? (
+                <ContactsTab data={data} onCreateClient={handleCreateClient} onUpdateClient={handleUpdateClient} onCreateSupplier={handleCreateSupplier} onUpdateSupplier={handleUpdateSupplier} />
+              ) : null}
+              {configTab === "products" && canOperate ? (
+                <ProductsTab isAdmin={isAdmin} onCreateProduct={handleCreateProduct} onUpdateProduct={handleUpdateProduct} onCreateInventoryAdjustment={handleCreateInventoryAdjustment} data={data} productQuery={productQuery} setProductQuery={setProductQuery} productOnlyStock={productOnlyStock} setProductOnlyStock={setProductOnlyStock} productStockOrder={productStockOrder} setProductStockOrder={setProductStockOrder} filteredProducts={filteredProducts} stockByProduct={stockByProduct} addProductToSaleCart={addProductToSaleCart} money={money} qty={qty} setProductOnlyStockAndQuery={() => { setProductQuery(""); setProductOnlyStock(false); }} />
+              ) : null}
+              {configTab === "sales-points" && isAdmin ? (
+                <SalesPointsTab warehouses={data.warehouses} onCreateWarehouse={handleCreateWarehouse} onUpdateWarehouse={handleUpdateWarehouse} />
+              ) : null}
+              {configTab === "users" && isAdmin ? (
+                <UsersTab users={data.users} roles={data.roles} onCreateUser={handleCreateUser} onUpdateUser={handleUpdateUser} />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {canOperate ? (
