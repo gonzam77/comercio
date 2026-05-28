@@ -48,12 +48,25 @@ async function ensureCashSessionColumns() {
   }
 }
 
+async function ensureWarehouseColumns() {
+  const qi = sequelize.getQueryInterface();
+  const table = await qi.describeTable('warehouses');
+  if (!table.active) {
+    await qi.addColumn('warehouses', 'active', {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    });
+  }
+}
+
 async function bootstrap() {
   try {
     await sequelize.authenticate();
     await sequelize.sync({force:false});
     await ensureCashflowColumns();
     await ensureCashSessionColumns();
+    await ensureWarehouseColumns();
     await seedCatalogs();
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

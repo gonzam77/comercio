@@ -40,11 +40,16 @@ async function seedCatalogs() {
 
   const [warehouse] = await Warehouse.findOrCreate({
     where: { name: 'Deposito Central' },
-    defaults: { name: 'Deposito Central', branchId: branch.id },
+    defaults: { name: 'Deposito Central', branchId: branch.id, active: true },
   });
 
   if (!warehouse.branchId) {
     warehouse.branchId = branch.id;
+  }
+  if (warehouse.active === null || warehouse.active === undefined) {
+    warehouse.active = true;
+  }
+  if (warehouse.changed()) {
     await warehouse.save();
   }
 

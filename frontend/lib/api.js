@@ -175,6 +175,22 @@ export async function updateUser(id, payload, token) {
   });
 }
 
+export async function createWarehouse(payload, token) {
+  return request('/warehouses', {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateWarehouse(id, payload, token) {
+  return request(`/warehouses/${id}`, {
+    method: 'PUT',
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function getMyCashSession(token) {
   return request('/cash-sessions/me', {
     headers: authHeaders(token),
