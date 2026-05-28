@@ -609,6 +609,8 @@ export default function DashboardPage() {
       return;
     }
     persistSelectedPosWarehouse(selectedPosWarehouseId);
+    setSaleForm((s) => ({ ...s, warehouseId: String(selectedPosWarehouseId) }));
+    setPurchaseForm((s) => ({ ...s, warehouseId: String(selectedPosWarehouseId) }));
     setShowPosSelectionModal(false);
     const info = await refreshCashSession(token);
     setShowCashPrompt(Boolean(info && !info.hasOpenSession));
@@ -1101,11 +1103,10 @@ export default function DashboardPage() {
   if (!token || !sessionUser) {
     return (
       <main>
-        <div className="header">
+        <div className="header" style={{ textAlign: "center", marginTop:"20px" }}>
           <h1>Panel Comercial</h1>
-          <p>Inicia sesion para operar con permisos por rol.</p>
         </div>
-        <div className="panel section" style={{ maxWidth: 500, margin: "0 auto" }}>
+        <div className="panel section" style={{ maxWidth: 500, margin: "12vh auto 0" }}>
           <h2>Acceso</h2>
           <form className="grid" onSubmit={handleLogin}>
             <input
